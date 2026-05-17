@@ -1,0 +1,13 @@
+{
+    "version": 1,
+    "hooks": {
+        "agentStop": [
+            {
+                "type": "command",
+                "bash": "uv run .agents/check.py",
+                "powershell": "uv run .agents/check.py",
+                "timeoutSec": 20
+            }
+        ]
+    }
+}

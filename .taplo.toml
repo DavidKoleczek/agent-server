@@ -1,0 +1,10 @@
+include = ["**/*.toml"]
+
+[formatting]
+column_width = 120
+array_auto_collapse = false  # Whether to collapse multi-line arrays onto a single line when they fit
+array_auto_expand = true     # Whether to expand single-line arrays across multiple lines when they exceed column_width
+array_trailing_comma = true
+indent_string = "    "
+reorder_keys = false         # Whether to alphabetize keys within each table
+reorder_arrays = true        # Whether to alphabetize values within arrays
