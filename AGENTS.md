@@ -53,3 +53,5 @@ print(render("Hello, {{ you }}!", you="World"))
 # Key Files
 
 @README.md
+
+@docs/DEVELOPMENT.md
