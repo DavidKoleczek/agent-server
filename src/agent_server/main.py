@@ -1,15 +1,10 @@
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI
 import uvicorn
 
+from agent_server.routes.activity import router as activity_router
+
 app = FastAPI()
-
-
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    while True:
-        data = await websocket.receive_text()
-        await websocket.send_text(f"Message text was: {data}")
+app.include_router(activity_router)
 
 
 def run() -> None:
