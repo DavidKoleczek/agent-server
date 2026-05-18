@@ -15,10 +15,11 @@ from typing import Any
 import websockets
 from websockets.asyncio.client import ClientConnection
 
-URL = "ws://127.0.0.1:8000/activity"
+URL = "ws://127.0.0.1:8000/agent"
 
 
 async def reader(ws: ClientConnection) -> None:
+    # Reads in messages as json from the server and prints them to stdout.
     async for message in ws:
         text = message if isinstance(message, str) else message.decode("utf-8", errors="replace")
         try:
@@ -33,6 +34,7 @@ async def reader(ws: ClientConnection) -> None:
 async def writer(ws: ClientConnection) -> None:
     loop = asyncio.get_running_loop()
     while True:
+        # Read user input from stdin
         sys.stdout.write("> ")
         sys.stdout.flush()
         line = await loop.run_in_executor(None, sys.stdin.readline)
@@ -43,6 +45,7 @@ async def writer(ws: ClientConnection) -> None:
         if not text:
             continue
 
+        # Create payload for the server based on the message sent.
         payload: dict[str, Any]
         if text == "/exit":
             await ws.close()
@@ -64,6 +67,8 @@ async def main() -> None:
         reader_task = asyncio.create_task(reader(ws))
         writer_task = asyncio.create_task(writer(ws))
         done, pending = await asyncio.wait({reader_task, writer_task}, return_when=asyncio.FIRST_COMPLETED)
+
+        # Shutdown/Cleanup
         for task in pending:
             task.cancel()
         for task in done:

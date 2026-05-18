@@ -1,10 +1,10 @@
 from fastapi import FastAPI
 import uvicorn
 
-from agent_server.routes.activity import router as activity_router
+from agent_server.routes.agent import router as agent_router
 
 app = FastAPI()
-app.include_router(activity_router)
+app.include_router(agent_router)
 
 
 def run() -> None:

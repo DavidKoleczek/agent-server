@@ -32,13 +32,9 @@ ClientActivity = UserActivity | CancelActivity | QuitActivity
 
 # region: Agent
 
-AssistantActivity = (
-    ResponseCreatedEvent
-    | ResponseFunctionCallArgumentsDeltaEvent
-    | ResponseCompletedEvent
-    | ResponseTextDeltaEvent
-    | ResponseReasoningSummaryTextDeltaEvent
-)
+
+class ReadyActivity(BaseModel):
+    type: Literal["ready"]
 
 
 class ToolActivity(BaseModel):
@@ -47,5 +43,15 @@ class ToolActivity(BaseModel):
     tool_arguments: dict[str, Any]
     tool_output: str
 
+
+AssistantActivity = (
+    ResponseCreatedEvent
+    | ResponseFunctionCallArgumentsDeltaEvent
+    | ResponseCompletedEvent
+    | ResponseTextDeltaEvent
+    | ResponseReasoningSummaryTextDeltaEvent
+    | ReadyActivity
+    | ToolActivity
+)
 
 # endregion

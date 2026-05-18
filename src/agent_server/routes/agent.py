@@ -2,7 +2,7 @@ import asyncio
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from openai.types.responses import ResponseTextDeltaEvent
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from agent_server.schemas.activity import (
     AssistantActivity,
@@ -20,8 +20,8 @@ _CLIENT_ACTIVITY_ADAPTER = TypeAdapter(ClientActivity)
 _STREAM_DELAY_SECONDS = 0.2
 
 
-@router.websocket("/activity")
-async def activity_endpoint(websocket: WebSocket) -> None:
+@router.websocket("/agent")
+async def agent_endpoint(websocket: WebSocket) -> None:
     await websocket.accept()
     try:
         while True:
@@ -68,11 +68,7 @@ def _hardcoded_response(prompt: str) -> list[AssistantActivity | ToolActivity]:
     return [*text_events, tool_event]
 
 
-async def _send_event(websocket: WebSocket, event: BaseModel) -> None:
-    await websocket.send_text(event.model_dump_json())
-
-
 async def _stream_response(websocket: WebSocket, prompt: str) -> None:
     for event in _hardcoded_response(prompt):
-        await _send_event(websocket, event)
+        await websocket.send_text(event.model_dump_json())
         await asyncio.sleep(_STREAM_DELAY_SECONDS)
