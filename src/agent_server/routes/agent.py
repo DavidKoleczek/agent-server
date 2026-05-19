@@ -1,15 +1,15 @@
 import asyncio
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from openai.types.responses import ResponseTextDeltaEvent
 from pydantic import TypeAdapter, ValidationError
 
+from agent_server.agent.agent_manager import AgentManager
 from agent_server.schemas.activity import (
     AssistantActivity,
     CancelActivity,
     ClientActivity,
+    ErrorActivity,
     QuitActivity,
-    ToolActivity,
     UserActivity,
 )
 
@@ -17,58 +17,53 @@ router = APIRouter()
 
 _CLIENT_ACTIVITY_ADAPTER = TypeAdapter(ClientActivity)
 
-_STREAM_DELAY_SECONDS = 0.2
-
 
 @router.websocket("/agent")
 async def agent_endpoint(websocket: WebSocket) -> None:
+    """
+    Websocket that handles realtime interaction with the agent.
+    It uses the AgentManager to create agent processes and send information back and forth between it and the client.
+    """
+    agent_activities: asyncio.Queue[AssistantActivity] = asyncio.Queue()
+    agent_manager = AgentManager(agent_activities=agent_activities)
+    # Start the runner
+    runner = asyncio.create_task(agent_manager.runner())
     await websocket.accept()
+    forwarder = asyncio.create_task(_forward_outbound(websocket, agent_activities))
     try:
         while True:
             raw = await websocket.receive_text()
             try:
-                activity = _CLIENT_ACTIVITY_ADAPTER.validate_json(raw)
+                activity: ClientActivity = _CLIENT_ACTIVITY_ADAPTER.validate_json(raw)
             except ValidationError as exc:
-                await websocket.send_json({"type": "error", "detail": exc.errors()})
+                await agent_activities.put(
+                    ErrorActivity(type="error", error_type="invalid_client_activity_format", detail=str(exc))
+                )
                 continue
 
             match activity:
-                case UserActivity(content=content):
-                    await _stream_response(websocket, content)
+                case UserActivity():
+                    await agent_manager.submit_user_activity(activity)
                 case CancelActivity():
-                    # Hard-coded responses are sent synchronously above, so there is nothing in-flight to cancel right now.
-                    await websocket.send_json({"type": "cancelled"})
+                    await agent_manager.cancel()
                 case QuitActivity():
                     await websocket.close()
                     return
     except WebSocketDisconnect:
         return
+    finally:
+        forwarder.cancel()
+        runner.cancel()
 
 
-def _hardcoded_response(prompt: str) -> list[AssistantActivity | ToolActivity]:
-    deltas = ["Hello! ", "You said: ", f"{prompt!r}. ", "Goodbye."]
-    text_events: list[AssistantActivity | ToolActivity] = [
-        ResponseTextDeltaEvent(
-            type="response.output_text.delta",
-            delta=delta,
-            item_id="msg_demo",
-            output_index=0,
-            content_index=0,
-            sequence_number=index,
-            logprobs=[],
-        )
-        for index, delta in enumerate(deltas)
-    ]
-    tool_event = ToolActivity(
-        type="tool",
-        tool_name="echo",
-        tool_arguments={"input": prompt},
-        tool_output=prompt,
-    )
-    return [*text_events, tool_event]
-
-
-async def _stream_response(websocket: WebSocket, prompt: str) -> None:
-    for event in _hardcoded_response(prompt):
-        await websocket.send_text(event.model_dump_json())
-        await asyncio.sleep(_STREAM_DELAY_SECONDS)
+async def _forward_outbound(
+    websocket: WebSocket,
+    agent_activities: asyncio.Queue[AssistantActivity],
+) -> None:
+    """Sole writer to the websocket. Drains the agent activities queue and sends each message as JSON."""
+    try:
+        while True:
+            message = await agent_activities.get()
+            await websocket.send_json(message.model_dump(mode="json"))
+    except (asyncio.CancelledError, WebSocketDisconnect):
+        return

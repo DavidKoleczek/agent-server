@@ -44,6 +44,12 @@ class ToolActivity(BaseModel):
     tool_output: str
 
 
+class ErrorActivity(BaseModel):
+    type: Literal["error"]
+    error_type: Literal["invalid_client_activity_format", "agent_error"]
+    detail: str
+
+
 AssistantActivity = (
     ResponseCreatedEvent
     | ResponseFunctionCallArgumentsDeltaEvent
@@ -52,6 +58,7 @@ AssistantActivity = (
     | ResponseReasoningSummaryTextDeltaEvent
     | ReadyActivity
     | ToolActivity
+    | ErrorActivity
 )
 
 # endregion
