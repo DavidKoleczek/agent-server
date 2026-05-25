@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import TypeAdapter, ValidationError
@@ -11,11 +12,15 @@ from agent_server.schemas.activity import (
     ErrorActivity,
     QuitActivity,
     UserActivity,
+    serialize_activity,
 )
 
 router = APIRouter()
 
 _CLIENT_ACTIVITY_ADAPTER = TypeAdapter(ClientActivity)
+
+# Captured at import time so it reflects the directory the server was started in.
+_SERVER_DIR = Path.cwd()
 
 
 @router.websocket("/agent")
@@ -24,8 +29,18 @@ async def agent_endpoint(websocket: WebSocket) -> None:
     Websocket that handles realtime interaction with the agent.
     It uses the AgentManager to create agent processes and send information back and forth between it and the client.
     """
+    working_dir_param = websocket.query_params.get("working_dir")
+    chat_file_param = websocket.query_params.get("chat_file")
+
+    working_dir = Path(working_dir_param) if working_dir_param else _SERVER_DIR
+    chat_file = Path(chat_file_param) if chat_file_param else None
+
     agent_activities: asyncio.Queue[AssistantActivity] = asyncio.Queue()
-    agent_manager = AgentManager(agent_activities=agent_activities)
+    agent_manager = AgentManager(
+        agent_activities=agent_activities,
+        working_dir=working_dir,
+        chat_file=chat_file,
+    )
     # Start the runner
     runner = asyncio.create_task(agent_manager.runner())
     await websocket.accept()
@@ -64,6 +79,6 @@ async def _forward_outbound(
     try:
         while True:
             message = await agent_activities.get()
-            await websocket.send_json(message.model_dump(mode="json"))
+            await websocket.send_json(serialize_activity(message))
     except (asyncio.CancelledError, WebSocketDisconnect):
         return

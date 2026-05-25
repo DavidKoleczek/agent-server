@@ -1,12 +1,9 @@
+import dataclasses
+import json
 from typing import Any, Literal
 
-from openai.types.responses import (
-    ResponseCompletedEvent,
-    ResponseCreatedEvent,
-    ResponseFunctionCallArgumentsDeltaEvent,
-    ResponseReasoningSummaryTextDeltaEvent,
-    ResponseTextDeltaEvent,
-)
+from interop_router.types import RouterResponse
+from openai.types.responses import ResponseStreamEvent
 from pydantic import BaseModel
 
 # region: Client
@@ -37,11 +34,12 @@ class ReadyActivity(BaseModel):
     type: Literal["ready"]
 
 
-class ToolActivity(BaseModel):
-    type: Literal["tool"]
-    tool_name: str
-    tool_arguments: dict[str, Any]
-    tool_output: str
+class TurnStartActivity(BaseModel):
+    type: Literal["turn_start"]
+
+
+class TurnEndActivity(BaseModel):
+    type: Literal["turn_end"]
 
 
 class ErrorActivity(BaseModel):
@@ -50,15 +48,28 @@ class ErrorActivity(BaseModel):
     detail: str
 
 
+class OpenAIStreamActivity(BaseModel):
+    type: Literal["openai_stream"]
+    model_name: str
+    stream_event: ResponseStreamEvent
+
+
+class RouterResponseActivity(BaseModel):
+    type: Literal["router_response"]
+    response: RouterResponse
+
+
 AssistantActivity = (
-    ResponseCreatedEvent
-    | ResponseFunctionCallArgumentsDeltaEvent
-    | ResponseCompletedEvent
-    | ResponseTextDeltaEvent
-    | ResponseReasoningSummaryTextDeltaEvent
-    | ReadyActivity
-    | ToolActivity
-    | ErrorActivity
+    ReadyActivity | TurnStartActivity | TurnEndActivity | ErrorActivity | OpenAIStreamActivity | RouterResponseActivity
 )
 
 # endregion
+
+
+def serialize_activity(activity: AssistantActivity) -> dict[str, Any]:
+    """Serialize any AssistantActivity to a JSON-compatible dict."""
+    if isinstance(activity, BaseModel):
+        return activity.model_dump(mode="json", warnings=False)
+    if dataclasses.is_dataclass(activity) and not isinstance(activity, type):
+        return json.loads(json.dumps(dataclasses.asdict(activity), default=str))
+    return {"raw": str(activity)}

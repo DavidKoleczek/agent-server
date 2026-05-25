@@ -14,7 +14,7 @@ Start the development server:
 uv run agent-server
 ```
 
-The server listens on `http://127.0.0.1:8000` with auto-reload enabled. A WebSocket echo endpoint is available at `ws://127.0.0.1:8000/ws`.
+The server listens on `http://127.0.0.1:8000` with auto-reload enabled.
 
 To launch under the VS Code debugger, open the Run and Debug view and select the `agent-server` configuration.
 
