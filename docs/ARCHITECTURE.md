@@ -5,8 +5,8 @@
 
 ## Overview
 
-The server is a FastAPI application that exposes a WebSocket endpoint at `/agent`. 
-When a client connects, the server spawns a dedicated subprocess to run the AI agent. 
+The server is a FastAPI application that exposes a WebSocket endpoint at `/agent`.
+When a client connects to `/agent`, the server spawns a dedicated subprocess to run the AI agent. 
 All communication between the client and the agent flows through JSON-serialized activity messages.
 
 The key components, in order of the request path:

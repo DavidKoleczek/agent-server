@@ -23,7 +23,7 @@ The goals of this server are to make interacting with agents feel more responsiv
 Start the server:
 
 ```bash
-uv run agent-server
+uv run agent-server --host 0.0.0.0 --port 8001 --reload
 ```
 
 Connect to the WebSocket and send a message:
