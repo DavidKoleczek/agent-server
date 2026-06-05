@@ -15,9 +15,9 @@ from loguru import logger
 from pydantic import TypeAdapter
 
 from agent_server.agent.agent import Agent, AgentConfig
-from agent_server.schemas.activity import AssistantActivity, UserActivity, serialize_activity
+from agent_server.schemas.activity import ClientEvent, StreamingEvent
 
-_USER_ACTIVITY_ADAPTER = TypeAdapter(UserActivity)
+_USER_ACTIVITY_ADAPTER = TypeAdapter(ClientEvent)
 
 
 async def main() -> None:
@@ -25,14 +25,14 @@ async def main() -> None:
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--working-dir", type=Path, required=True)
-    parser.add_argument("--chat-file", type=Path, default=None)
+    parser.add_argument("--session-database", type=Path, default=None)
     args = parser.parse_args()
 
-    user_queue: asyncio.Queue[UserActivity] = asyncio.Queue()
-    agent_queue: asyncio.Queue[AssistantActivity] = asyncio.Queue()
+    user_queue: asyncio.Queue[ClientEvent] = asyncio.Queue()
+    agent_queue: asyncio.Queue[StreamingEvent] = asyncio.Queue()
 
     logger.info("Agent worker starting (working_dir={})", args.working_dir)
-    config = AgentConfig(working_dir=args.working_dir, chat_file=args.chat_file)
+    config = AgentConfig(working_dir=args.working_dir, session_database=args.session_database)
     agent = Agent(config=config)
     logger.info("Agent initialized")
 
@@ -40,14 +40,13 @@ async def main() -> None:
     writer_task = asyncio.create_task(_stdout_writer(agent_queue))
     try:
         while True:
-            # Block until at least one activity arrives, then put it back for agent.run to drain.
-            logger.info("Waiting for user activity on stdin")
+            # The reader thread continuously drains stdin into user_queue, so input is accepted at all times.
+            # Here we only block until there is work to begin a turn; agent.run then drains the queue itself,
+            # including any steering messages that arrive mid-turn.
             first = await user_queue.get()
-            logger.info("Received activity, starting agent.run")
             user_queue.put_nowait(first)
             try:
                 await agent.run(user_queue, agent_queue)
-                logger.info("agent.run returned")
             except Exception:
                 logger.exception("agent.run raised an exception")
                 raise
@@ -59,7 +58,7 @@ async def main() -> None:
             # Drain any remaining activities so the parent sees them before EOF.
             while not agent_queue.empty():
                 activity = agent_queue.get_nowait()
-                line = json.dumps(serialize_activity(activity)) + "\n"
+                line = json.dumps(activity.model_dump(mode="json")) + "\n"
                 sys.stdout.buffer.write(line.encode())
             sys.stdout.buffer.flush()
         except Exception:
@@ -88,18 +87,18 @@ def _patch_subprocess_default_stdin() -> None:
     type.__setattr__(subprocess.Popen, "__init__", _patched_init)
 
 
-async def _stdout_writer(queue: asyncio.Queue[AssistantActivity]) -> None:
+async def _stdout_writer(queue: asyncio.Queue[StreamingEvent]) -> None:
     def _write(payload: bytes) -> None:
         sys.stdout.buffer.write(payload)
         sys.stdout.buffer.flush()
 
     while True:
         activity = await queue.get()
-        line = json.dumps(serialize_activity(activity)) + "\n"
+        line = json.dumps(activity.model_dump(mode="json")) + "\n"
         await asyncio.to_thread(_write, line.encode())
 
 
-async def _stdin_reader(queue: asyncio.Queue[UserActivity]) -> None:
+async def _stdin_reader(queue: asyncio.Queue[ClientEvent]) -> None:
     while True:
         line = await asyncio.to_thread(sys.stdin.buffer.readline)
         if not line:

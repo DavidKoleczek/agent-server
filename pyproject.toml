@@ -1,6 +1,6 @@
 [project]
 name = "agent-server"
-version = "0.1.0"
+version = "0.1.1"
 description = "The server that powers agent-tui"
 readme = "README.md"
 authors = [
@@ -8,9 +8,11 @@ authors = [
 ]
 requires-python = ">=3.13"
 dependencies = [
+    "SQLAlchemy>=2.0,<2.1",
     "agent-core-toolkit==0.1.5",
     "fastapi[standard]>=0.136,<1.0",
     "interop-router==0.2.0",
+    "jiter>=0.15,<1.0",
     "loguru>=0.7,<1.0",
     "pydantic>=2.13,<3.0",
     "tzdata>=2026.2",

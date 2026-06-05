@@ -1,23 +1,24 @@
 import asyncio
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import TypeAdapter, ValidationError
 
 from agent_server.agent.agent_manager import AgentManager
 from agent_server.schemas.activity import (
-    AssistantActivity,
-    CancelActivity,
-    ClientActivity,
+    ActivityCreatedEvent,
+    CancelEvent,
+    ClientEvent,
     ErrorActivity,
-    QuitActivity,
-    UserActivity,
-    serialize_activity,
+    QuitEvent,
+    StreamingEvent,
+    UserMessageEvent,
 )
 
 router = APIRouter()
 
-_CLIENT_ACTIVITY_ADAPTER = TypeAdapter(ClientActivity)
+_CLIENT_ACTIVITY_ADAPTER = TypeAdapter(ClientEvent)
 
 # Captured at import time so it reflects the directory the server was started in.
 _SERVER_DIR = Path.cwd()
@@ -30,16 +31,16 @@ async def agent_endpoint(websocket: WebSocket) -> None:
     It uses the AgentManager to create agent processes and send information back and forth between it and the client.
     """
     working_dir_param = websocket.query_params.get("working_dir")
-    chat_file_param = websocket.query_params.get("chat_file")
+    session_database_param = websocket.query_params.get("session_database")
 
     working_dir = Path(working_dir_param) if working_dir_param else _SERVER_DIR
-    chat_file = Path(chat_file_param) if chat_file_param else None
+    session_database = Path(session_database_param) if session_database_param else None
 
-    agent_activities: asyncio.Queue[AssistantActivity] = asyncio.Queue()
+    agent_activities: asyncio.Queue[StreamingEvent] = asyncio.Queue()
     agent_manager = AgentManager(
         agent_activities=agent_activities,
         working_dir=working_dir,
-        chat_file=chat_file,
+        session_database=session_database,
     )
     # Start the runner
     runner = asyncio.create_task(agent_manager.runner())
@@ -49,19 +50,26 @@ async def agent_endpoint(websocket: WebSocket) -> None:
         while True:
             raw = await websocket.receive_text()
             try:
-                activity: ClientActivity = _CLIENT_ACTIVITY_ADAPTER.validate_json(raw)
+                activity: ClientEvent = _CLIENT_ACTIVITY_ADAPTER.validate_json(raw)
             except ValidationError as exc:
                 await agent_activities.put(
-                    ErrorActivity(type="error", error_type="invalid_client_activity_format", detail=str(exc))
+                    ActivityCreatedEvent(
+                        activity=ErrorActivity(
+                            id=str(uuid4()),
+                            state="error",
+                            error_type="invalid_client_activity_format",
+                            detail=str(exc),
+                        )
+                    )
                 )
                 continue
 
             match activity:
-                case UserActivity():
+                case UserMessageEvent():
                     await agent_manager.submit_user_activity(activity)
-                case CancelActivity():
+                case CancelEvent():
                     await agent_manager.cancel()
-                case QuitActivity():
+                case QuitEvent():
                     await websocket.close()
                     return
     except WebSocketDisconnect:
@@ -73,12 +81,12 @@ async def agent_endpoint(websocket: WebSocket) -> None:
 
 async def _forward_outbound(
     websocket: WebSocket,
-    agent_activities: asyncio.Queue[AssistantActivity],
+    agent_activities: asyncio.Queue[StreamingEvent],
 ) -> None:
     """Sole writer to the websocket. Drains the agent activities queue and sends each message as JSON."""
     try:
         while True:
             message = await agent_activities.get()
-            await websocket.send_json(serialize_activity(message))
+            await websocket.send_json(message.model_dump(mode="json"))
     except (asyncio.CancelledError, WebSocketDisconnect):
         return

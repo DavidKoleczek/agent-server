@@ -38,7 +38,6 @@ import json
 import os
 from pathlib import Path
 import re
-from typing import Any
 import uuid
 
 from agent_core.hooks import git, system_info
@@ -47,7 +46,7 @@ from agent_core.tools.presets import permissive_tools
 from anthropic import AsyncAnthropic
 from google import genai
 from interop_router.router import Router
-from interop_router.types import ChatMessage, RouterResponse, SupportedModel
+from interop_router.types import ChatMessage, InteropRouterError, RouterResponse, RouterStream, SupportedModel
 from liquid import render
 from openai import AsyncOpenAI
 from openai.types.responses import EasyInputMessageParam
@@ -56,23 +55,28 @@ from openai.types.responses.tool_param import ToolParam
 from openai.types.shared_params import Reasoning
 from pydantic import BaseModel, Field
 
+from agent_server.agent.activity_converter import response_to_activities
+from agent_server.agent.activity_stream_converter import ActivityStreamConverter, error_event, is_terminal_error
 from agent_server.agent.prompts.system_prompt import SYSTEM_PROMPT
 from agent_server.schemas.activity import (
-    AssistantActivity,
-    OpenAIStreamActivity,
-    ReadyActivity,
-    RouterResponseActivity,
-    TurnEndActivity,
-    TurnStartActivity,
-    UserActivity,
+    ClientEvent,
+    ReadyEvent,
+    SessionActivity,
+    StreamingEvent,
+    TaskPermission,
+    TurnEndEvent,
+    TurnStartEvent,
+    UserMessageEvent,
 )
+from agent_server.schemas.session import SessionChatMessage
+from agent_server.storage.session_store import SessionStore
 
 
 class AgentConfig(BaseModel):
     working_dir: Path = Field(description="Directory the agent is working in.")
-    chat_file: Path | None = Field(
+    session_database: Path | None = Field(
         default=None,
-        description="Path to the chat history. If None, a new file is created in the system temp directory.",
+        description="Path to the SQLite session database. If None, a new database is created in .agents/sessions.",
     )
     max_subagent_depth: int = Field(
         default=1,
@@ -84,8 +88,10 @@ class Agent:
     def __init__(self, config: AgentConfig):
         self.config = config
 
-        self._chat_file = self._resolve_chat_file()
-        self.history: list[ChatMessage] = self._load_history()
+        self._session_database = self._resolve_session_database()
+        self._session_store = SessionStore(self._session_database)
+        self.history: list[SessionChatMessage] = self._session_store.load_session_chat_messages()
+        self.activities: list[SessionActivity] = self._session_store.load_activities()
 
         # TODO: Temp init the router here
         self.router = Router()
@@ -99,13 +105,13 @@ class Agent:
         self.tools = permissive_tools(self.config.working_dir)
 
     async def run(
-        self, user_activities: asyncio.Queue[UserActivity], agent_activities: asyncio.Queue[AssistantActivity]
+        self, user_activities: asyncio.Queue[ClientEvent], agent_activities: asyncio.Queue[StreamingEvent]
     ) -> None:
         """
         Handles all the AI agent logic. It interacts with the outside world by ready and writing to user_activities and agent_activities, respectively.
         """
-        agent_activities.put_nowait(ReadyActivity(type="ready"))
-        agent_activities.put_nowait(TurnStartActivity(type="turn_start"))
+        agent_activities.put_nowait(ReadyEvent())
+        agent_activities.put_nowait(TurnStartEvent())
 
         self._drain_user_activities(user_activities)
         if not self.history:
@@ -137,13 +143,13 @@ class Agent:
                 recent_commits=git.recent_commits(working_dir) or "N/A",
             )
 
-            # Create a copy of history to modify for the model call
-            history_copy = copy.deepcopy(self.history)
-            history_copy.insert(0, ChatMessage(message=EasyInputMessageParam(role="system", content=system_prompt)))
+            # Create a copy of history to modify for the model call.
+            model_input = copy.deepcopy([x.chat_message for x in self.history])
+            model_input.insert(0, ChatMessage(message=EasyInputMessageParam(role="system", content=system_prompt)))
 
             # Call the model and stream events to the caller.
             stream = await self.router.create(
-                input=self.history,
+                input=model_input,
                 model=self.model,
                 stream=True,
                 reasoning=Reasoning(effort="medium", summary="auto"),
@@ -151,26 +157,15 @@ class Agent:
                 tools=request_tools,
                 max_output_tokens=120_000,
             )
-
-            response = None
-            async for event in stream:
-                if isinstance(event, RouterResponse):
-                    response = event
-                    router_response_activity = RouterResponseActivity(type="router_response", response=event)
-                    await agent_activities.put(router_response_activity)
-                else:
-                    openai_stream_activity = OpenAIStreamActivity(
-                        type="openai_stream", model_name=self.model, stream_event=event
-                    )
-                    await agent_activities.put(openai_stream_activity)
-
+            response = await self._handle_router_stream(stream, agent_activities)
             if response is None:
                 break
 
+            [self._append_activity(activity) for activity in response_to_activities(response)]
+
             had_tool_call = False
             for msg in response.output:
-                self.history.append(msg)
-                await self._save_history()
+                self._append_chat_message(msg)
                 # For any non-tool call messages, add them to the history
                 if msg.message.get("type") != "function_call":
                     continue
@@ -193,8 +188,7 @@ class Agent:
                 output_message = ChatMessage(
                     message=FunctionCallOutput(call_id=call_id, type="function_call_output", output=output)
                 )
-                self.history.append(output_message)
-                await self._save_history()
+                self._append_chat_message(output_message)
                 had_tool_call = True
 
             can_break = True
@@ -210,12 +204,15 @@ class Agent:
             if can_break:
                 break
 
-        agent_activities.put_nowait(TurnEndActivity(type="turn_end"))
+        agent_activities.put_nowait(TurnEndEvent())
 
-    def _resolve_chat_file(self) -> Path:
-        """Return chat file path from config, or generate one in .agents/sessions."""
-        if self.config.chat_file is not None:
-            return self.config.chat_file
+    def close(self) -> None:
+        self._session_store.close()
+
+    def _resolve_session_database(self) -> Path:
+        """Creates a session db path if one was not provided"""
+        if self.config.session_database is not None:
+            return self.config.session_database
 
         sessions_dir = self.config.working_dir / ".agents" / "sessions"
         sessions_dir.mkdir(parents=True, exist_ok=True)
@@ -225,41 +222,63 @@ class Agent:
 
         date_str = datetime.now().strftime("%Y-%m-%d")
         short_uuid = str(uuid.uuid4())[:8]
-        filename = f"{sanitized_name}_{date_str}_{short_uuid}.json"
+        filename = f"{sanitized_name}_{date_str}_{short_uuid}.sqlite"
 
         return sessions_dir / filename
 
-    def _load_history(self) -> list[ChatMessage]:
-        try:
-            data = json.loads(self._chat_file.read_text())
-            history = [ChatMessage.from_json(json.dumps(item)) for item in data]
-            return history
-        except Exception:
-            return []
+    def _append_chat_message(
+        self, message: ChatMessage, permission: TaskPermission | None = None
+    ) -> SessionChatMessage:
+        """Processes the given ChatMessage into the session store and in-memory history."""
+        position = len(self.history)
+        self._session_store.add_chat_message(position, message, permission=permission)
+        session_message = SessionChatMessage(position=position, permission=permission, chat_message=message)
+        self.history.append(session_message)
+        return session_message
 
-    async def _save_history(self) -> None:
-        def serialize(msg: ChatMessage) -> dict[str, Any]:
-            data = json.loads(msg.model_dump_json())
-            return data
+    def _append_activity(self, activity: SessionActivity) -> SessionActivity:
+        """Processes the given activity into the session store and in-memory activities"""
+        position = len(self.activities)
+        self._session_store.save_activity(position, activity)
+        self.activities.append(activity)
+        return activity
 
-        json_data = json.dumps([serialize(m) for m in self.history], indent=2)
-        self._chat_file.write_text(json_data)
-
-    def _drain_user_activities(self, queue: asyncio.Queue[UserActivity]) -> list[ChatMessage]:
-        """Drain all currently queued UserActivity items into self.history as chat messages.
-
+    def _drain_user_activities(self, queue: asyncio.Queue[ClientEvent]) -> list[SessionChatMessage]:
+        """Drain currently queued user message events into session chat history.
         Non-blocking: only takes items that are already available.
 
         Returns:
-            The ChatMessages that were appended to history.
+            The session chat messages that were appended to history.
         """
-        messages: list[ChatMessage] = []
+        messages: list[SessionChatMessage] = []
         while True:
             try:
                 activity = queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
-            msg = ChatMessage(message=EasyInputMessageParam(role="user", content=activity.content))
-            self.history.append(msg)
-            messages.append(msg)
+            if isinstance(activity, UserMessageEvent):
+                msg = ChatMessage(message=EasyInputMessageParam(role="user", content=activity.content))
+                messages.append(self._append_chat_message(msg))
         return messages
+
+    async def _handle_router_stream(
+        self, stream: RouterStream, agent_activities: asyncio.Queue[StreamingEvent]
+    ) -> RouterResponse | None:
+        """Processes the stream of events from the router call into activities that are sent to the client.
+        Returns the final RouterResponse when the stream is done, or None if the stream ended without a RouterResponse.
+        """
+        converter = ActivityStreamConverter()
+        try:
+            async for event in stream:
+                if isinstance(event, RouterResponse):
+                    # RouterResponse is the final event after streaming is done.
+                    return event
+                for streaming_event in converter.handle(event):
+                    await agent_activities.put(streaming_event)
+                # On a terminal error the provider ends the stream without a RouterResponse, so stop here.
+                if is_terminal_error(event):
+                    return None
+        except InteropRouterError as exc:
+            await agent_activities.put(error_event("router_error", str(exc)))
+            return None
+        return None

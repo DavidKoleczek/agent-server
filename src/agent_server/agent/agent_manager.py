@@ -1,36 +1,45 @@
 import asyncio
 from collections import deque
 from pathlib import Path
+import subprocess
 import sys
+import threading
+from typing import IO
+from uuid import uuid4
 
 from loguru import logger
 from pydantic import TypeAdapter
 
-from agent_server.schemas.activity import AssistantActivity, ErrorActivity, UserActivity
+from agent_server.schemas.activity import (
+    ActivityCreatedEvent,
+    ClientEvent,
+    ErrorActivity,
+    StreamingEvent,
+    UserMessageEvent,
+)
 
-_ASSISTANT_ACTIVITY_ADAPTER = TypeAdapter(AssistantActivity)
+_STREAMING_EVENT_ADAPTER = TypeAdapter(StreamingEvent)
 
 
 class AgentManager:
     def __init__(
         self,
-        agent_activities: asyncio.Queue[AssistantActivity],
+        agent_activities: asyncio.Queue[StreamingEvent],
         working_dir: Path,
-        chat_file: Path | None = None,
+        session_database: Path | None = None,
     ):
         # A list of user activities that have not been forwarded to the agent yet.
-        self._pending: deque[UserActivity] = deque()
+        self._pending: deque[ClientEvent] = deque()
         # This indicates whether there are pending activities that need to be forwarded. This is used to avoid polling on the pending queue.
         self._has_pending = asyncio.Event()
         self._agent_activities = agent_activities
         self._working_dir = working_dir
-        self._chat_file = chat_file
-        self._proc: asyncio.subprocess.Process | None = None
+        self._session_database = session_database
+        self._proc: subprocess.Popen[bytes] | None = None
         self._writer_task: asyncio.Task[None] | None = None
-        self._reader_task: asyncio.Task[None] | None = None
         self._stderr_lines: list[str] = []
 
-    async def submit_user_activity(self, activity: UserActivity) -> None:
+    async def submit_user_activity(self, activity: UserMessageEvent) -> None:
         """Submits user activities to the agent."""
         self._pending.append(activity)
         self._has_pending.set()
@@ -38,20 +47,21 @@ class AgentManager:
     async def cancel(self) -> None:
         """Immediately kills the agent and any of its sub-agents."""
         proc = self._proc
-        if proc is not None and proc.returncode is None:
+        if proc is not None and proc.poll() is None:
             proc.kill()
-            await proc.wait()
+            await asyncio.to_thread(proc.wait)
 
-    async def runner(self):
+    async def runner(self) -> None:
         """
         Starts the agent and manages its lifecycle.
         Forwards activities to the agent and writes activities back to the websocket endpoint.
         """
+        loop = asyncio.get_running_loop()
 
         while True:
-            # Agent is not running: block until there is work, then spawn a new subprocess.
+            # Agent is not running: block until there is work, then spawn a new subprocess. The event is left
+            # set so the stdin pump observes it and flushes these initial activities once the process is up.
             await self._has_pending.wait()
-            self._has_pending.clear()
 
             self._stderr_lines = []
             logger.info("Starting agent subprocess")
@@ -62,37 +72,37 @@ class AgentManager:
                 "--working-dir",
                 str(self._working_dir),
             ]
-            if self._chat_file is not None:
-                cmd.extend(["--chat-file", str(self._chat_file)])
-            self._proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            if self._session_database is not None:
+                cmd.extend(["--session-database", str(self._session_database)])
+            proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
             )
+            self._proc = proc
 
-            # Flush initial activities directly before starting the pump task
-            assert self._proc.stdin is not None
-            while self._pending:
-                activity = self._pending.popleft()
-                line = activity.model_dump_json() + "\n"
-                self._proc.stdin.write(line.encode())
-            await self._proc.stdin.drain()
+            # The process closes its pipes on exit, so stdout EOF is the signal that the run has finished.
+            stdout_eof = asyncio.Event()
+            stdout_thread = threading.Thread(
+                target=self._read_stdout, args=(proc, loop, stdout_eof), name="agent-stdout", daemon=True
+            )
+            stderr_thread = threading.Thread(target=self._read_stderr, args=(proc,), name="agent-stderr", daemon=True)
+            stdout_thread.start()
+            stderr_thread.start()
 
-            self._writer_task = asyncio.create_task(self._pump_stdin())
-            self._reader_task = asyncio.create_task(self._pump_stdout())
-            stderr_task = asyncio.create_task(self._pump_stderr())
+            self._writer_task = asyncio.create_task(self._pump_stdin(proc))
             try:
-                await self._proc.wait()
-                # Let the pump tasks drain remaining output after process exit.
-                await stderr_task
-                await self._reader_task
+                await stdout_eof.wait()
+                # The process is exiting; reaping and joining the reader threads is near-instant now that the pipes have closed.
+                # Done in threads so a slow shutdown never blocks the event loop.
+                await asyncio.to_thread(proc.wait)
+                await asyncio.to_thread(stdout_thread.join)
+                await asyncio.to_thread(stderr_thread.join)
             finally:
                 self._writer_task.cancel()
-                self._reader_task.cancel()
-                stderr_task.cancel()
 
-                returncode = self._proc.returncode
+                returncode = proc.returncode
                 if returncode is not None and returncode != 0:
                     logger.error("Agent subprocess crashed (exit code {})", returncode)
                     detail = (
@@ -101,68 +111,70 @@ class AgentManager:
                         else f"Process exited with code {returncode}"
                     )
                     await self._agent_activities.put(
-                        ErrorActivity(type="error", error_type="agent_error", detail=detail)
+                        ActivityCreatedEvent(
+                            activity=ErrorActivity(
+                                id=str(uuid4()),
+                                state="error",
+                                error_type="agent_error",
+                                detail=detail,
+                            )
+                        )
                     )
                 else:
                     logger.info("Agent subprocess exited normally")
 
                 self._proc = None
                 self._writer_task = None
-                self._reader_task = None
 
-    async def _pump_stdin(self) -> None:
+    async def _pump_stdin(self, proc: subprocess.Popen[bytes]) -> None:
         """Forwards pending user activities to the running agent's stdin."""
-        assert self._proc is not None
-        assert self._proc.stdin is not None
-        stdin = self._proc.stdin
+        stdin = proc.stdin
+        assert stdin is not None
         try:
             while True:
-                # Agent is already running : wait for new activities and forward them.
                 await self._has_pending.wait()
                 # Clear before draining so a concurrent append + set during the drain leaves the event set for the next iteration rather than being lost.
                 self._has_pending.clear()
+                lines: list[str] = []
                 while self._pending:
                     activity = self._pending.popleft()
-                    line = activity.model_dump_json() + "\n"
-                    stdin.write(line.encode())
-                await stdin.drain()
-        except (BrokenPipeError, ConnectionResetError, asyncio.CancelledError):
+                    lines.append(activity.model_dump_json() + "\n")
+                if lines:
+                    await asyncio.to_thread(self._write_stdin, stdin, "".join(lines).encode())
+        except asyncio.CancelledError:
             return
 
-    async def _pump_stdout(self) -> None:
-        """Continually reads from the stdout of the agent process and puts the activities into the agent_activities queue."""
-        assert self._proc is not None
-        assert self._proc.stdout is not None
-        stdout = self._proc.stdout
+    @staticmethod
+    def _write_stdin(stdin: IO[bytes], data: bytes) -> None:
         try:
-            while True:
-                line = await stdout.readline()
-                if not line:
-                    logger.info("Agent stdout EOF")
-                    return
+            stdin.write(data)
+            stdin.flush()
+        except (BrokenPipeError, OSError, ValueError):
+            # The process exited and closed the pipe; the activities it missed are surfaced by exit handling.
+            return
+
+    def _read_stdout(self, proc: subprocess.Popen[bytes], loop: asyncio.AbstractEventLoop, eof: asyncio.Event) -> None:
+        """Reads agent stdout on a thread and hands each activity to the event loop until the pipe closes."""
+        stdout = proc.stdout
+        assert stdout is not None
+        try:
+            for line in iter(stdout.readline, b""):
                 try:
-                    activity = _ASSISTANT_ACTIVITY_ADAPTER.validate_json(line)
+                    activity = _STREAMING_EVENT_ADAPTER.validate_json(line)
                 except Exception:
                     logger.error("Failed to validate agent stdout line: {}", line[:200])
                     continue
-                logger.debug("Forwarding activity: {}", type(activity).__name__)
-                await self._agent_activities.put(activity)
-        except (BrokenPipeError, ConnectionResetError, asyncio.CancelledError):
-            return
+                loop.call_soon_threadsafe(self._agent_activities.put_nowait, activity)
+        finally:
+            logger.info("Agent stdout EOF")
+            loop.call_soon_threadsafe(eof.set)
 
-    async def _pump_stderr(self) -> None:
-        """Reads stderr from the agent subprocess, logs each line, and collects them for error reporting."""
-        assert self._proc is not None
-        assert self._proc.stderr is not None
-        stderr = self._proc.stderr
-        try:
-            while True:
-                line = await stderr.readline()
-                if not line:
-                    return
-                text = line.decode().rstrip()
-                if text:
-                    self._stderr_lines.append(text)
-                    logger.warning("agent stderr: {}", text)
-        except (BrokenPipeError, ConnectionResetError, asyncio.CancelledError):
-            return
+    def _read_stderr(self, proc: subprocess.Popen[bytes]) -> None:
+        """Reads stderr from the agent subprocess on a thread, logging each line and collecting it for error reporting."""
+        stderr = proc.stderr
+        assert stderr is not None
+        for line in iter(stderr.readline, b""):
+            text = line.decode().rstrip()
+            if text:
+                self._stderr_lines.append(text)
+                logger.warning("agent stderr: {}", text)

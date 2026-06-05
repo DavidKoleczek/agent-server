@@ -1,75 +1,126 @@
-import dataclasses
-import json
+from datetime import UTC, datetime
 from typing import Any, Literal
 
-from interop_router.types import RouterResponse
-from openai.types.responses import ResponseStreamEvent
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-# region: Client
-# These are expected to be sent by the client at any time.
+ActivityState = Literal["in_progress", "complete", "error", "cancelled"]
+TaskPermission = Literal["accepted", "denied", "pending"]
+
+# region Client Events
+# Client events are inbound commands from the client. They are not persisted as conversation history.
 
 
-class UserActivity(BaseModel):
-    type: Literal["user_message"]
+class UserMessageEvent(BaseModel):
+    type: Literal["user_message"] = "user_message"
     content: str
 
 
-class CancelActivity(BaseModel):
-    type: Literal["cancel"]
+class CancelEvent(BaseModel):
+    type: Literal["cancel"] = "cancel"
 
 
-class QuitActivity(BaseModel):
-    type: Literal["quit"]
+class QuitEvent(BaseModel):
+    type: Literal["quit"] = "quit"
 
+
+ClientEvent = UserMessageEvent | CancelEvent | QuitEvent
 
 # endregion
 
-ClientActivity = UserActivity | CancelActivity | QuitActivity
-
-# region: Agent
-
-
-class ReadyActivity(BaseModel):
-    type: Literal["ready"]
+# region Session Activities
+# Session activities are persisted session history that can be loaded by clients later.
 
 
-class TurnStartActivity(BaseModel):
-    type: Literal["turn_start"]
+class ActivityBase(BaseModel):
+    id: str
+    state: ActivityState
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
-class TurnEndActivity(BaseModel):
-    type: Literal["turn_end"]
+class UserActivity(ActivityBase):
+    type: Literal["user"] = "user"
+    content: str
 
 
-class ErrorActivity(BaseModel):
-    type: Literal["error"]
-    error_type: Literal["invalid_client_activity_format", "agent_error"]
+class AssistantActivity(ActivityBase):
+    type: Literal["assistant"] = "assistant"
+    content: str
+
+
+class ReasoningActivity(ActivityBase):
+    type: Literal["reasoning"] = "reasoning"
+    content: str
+
+
+class TaskActivity(ActivityBase):
+    type: Literal["task"] = "task"
+    name: str
+    permission: TaskPermission = "pending"
+    arguments: dict[str, Any] | None = None
+    result: str | None = None
+
+
+class ErrorActivity(ActivityBase):
+    type: Literal["error"] = "error"
+    error_type: str
     detail: str
 
 
-class OpenAIStreamActivity(BaseModel):
-    type: Literal["openai_stream"]
-    model_name: str
-    stream_event: ResponseStreamEvent
-
-
-class RouterResponseActivity(BaseModel):
-    type: Literal["router_response"]
-    response: RouterResponse
-
-
-AssistantActivity = (
-    ReadyActivity | TurnStartActivity | TurnEndActivity | ErrorActivity | OpenAIStreamActivity | RouterResponseActivity
-)
+SessionActivity = UserActivity | AssistantActivity | ReasoningActivity | TaskActivity | ErrorActivity
 
 # endregion
 
+# region Streaming Events
+# Streaming events are the live updates that the server sends to the client.
+# They are ephemeral and not persisted.
 
-def serialize_activity(activity: AssistantActivity) -> dict[str, Any]:
-    """Serialize any AssistantActivity to a JSON-compatible dict."""
-    if isinstance(activity, BaseModel):
-        return activity.model_dump(mode="json", warnings=False)
-    if dataclasses.is_dataclass(activity) and not isinstance(activity, type):
-        return json.loads(json.dumps(dataclasses.asdict(activity), default=str))
-    return {"raw": str(activity)}
+
+class TaskArgumentDelta(BaseModel):
+    key: str
+    value: Any
+
+
+class ActivityDelta(BaseModel):
+    content_delta: str | None = None
+    argument_delta: TaskArgumentDelta | None = None
+    result_delta: str | None = None
+    permission: TaskPermission | None = None
+
+
+class ReadyEvent(BaseModel):
+    type: Literal["ready"] = "ready"
+
+
+class TurnStartEvent(BaseModel):
+    type: Literal["turn_start"] = "turn_start"
+
+
+class TurnEndEvent(BaseModel):
+    type: Literal["turn_end"] = "turn_end"
+
+
+class ActivityCreatedEvent(BaseModel):
+    type: Literal["activity_created"] = "activity_created"
+    activity: SessionActivity
+
+
+class ActivityDeltaEvent(BaseModel):
+    """Used to patch an existing activity. Intended for streaming efficiency."""
+
+    type: Literal["activity_delta"] = "activity_delta"
+    activity_id: str
+    delta: ActivityDelta
+
+
+class ActivityUpdatedEvent(BaseModel):
+    """The full updated activity."""
+
+    type: Literal["activity_updated"] = "activity_updated"
+    activity: SessionActivity
+
+
+StreamingEvent = (
+    ActivityCreatedEvent | ActivityDeltaEvent | ActivityUpdatedEvent | ReadyEvent | TurnStartEvent | TurnEndEvent
+)
+
+# endregion
