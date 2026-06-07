@@ -52,6 +52,11 @@ print(render("Hello, {{ you }}!", you="World"))
 
 # Key Files
 
+reference/ includes the source code for key libraries as a reference:
+- `agent-tui` - The main consumer of agent-server
+
+
+
 @README.md
 
 @docs/DEVELOPMENT.md

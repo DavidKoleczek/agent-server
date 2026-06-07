@@ -1,5 +1,9 @@
 # Project Specific
 temp/
+reference/
+.agents/sessions/
+.agents/logs/
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
