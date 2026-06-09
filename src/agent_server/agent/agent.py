@@ -60,12 +60,10 @@ from agent_server.agent.activity_stream_converter import ActivityStreamConverter
 from agent_server.agent.prompts.system_prompt import SYSTEM_PROMPT
 from agent_server.schemas.activity import (
     ClientEvent,
-    ReadyEvent,
     SessionActivity,
+    StatusEvent,
     StreamingEvent,
     TaskPermission,
-    TurnEndEvent,
-    TurnStartEvent,
     UserMessageEvent,
 )
 from agent_server.schemas.session import SessionChatMessage
@@ -110,8 +108,7 @@ class Agent:
         """
         Handles all the AI agent logic. It interacts with the outside world by ready and writing to user_activities and agent_activities, respectively.
         """
-        agent_activities.put_nowait(ReadyEvent())
-        agent_activities.put_nowait(TurnStartEvent())
+        agent_activities.put_nowait(StatusEvent(status_id="agent_running"))
 
         self._drain_user_activities(user_activities)
         if not self.history:
@@ -119,6 +116,7 @@ class Agent:
 
         while True:
             # Get tools ready
+            agent_activities.put_nowait(StatusEvent(status_id="starting_new_turn"))
             request_tools: list[ToolParam] = [defn for tool in self.tools for defn in tool.TOOLS.values()]
             tool_by_name: dict[str, Tool] = {}
             for tool in self.tools:
@@ -157,7 +155,9 @@ class Agent:
                 tools=request_tools,
                 max_output_tokens=120_000,
             )
+            agent_activities.put_nowait(StatusEvent(status_id="waiting_for_llm_response"))
             response = await self._handle_router_stream(stream, agent_activities)
+            agent_activities.put_nowait(StatusEvent(status_id="processing_llm_response"))
             if response is None:
                 break
 
@@ -179,6 +179,7 @@ class Agent:
                 tool_name = str(msg.message.get("name", ""))
                 tool = tool_by_name.get(tool_name)
                 if tool:
+                    agent_activities.put_nowait(StatusEvent(status_id="executing_tool"))
                     output = tool.execute(**arguments)
                     if inspect.iscoroutine(output):
                         output = await output
@@ -204,7 +205,7 @@ class Agent:
             if can_break:
                 break
 
-        agent_activities.put_nowait(TurnEndEvent())
+        agent_activities.put_nowait(StatusEvent(status_id="agent_run_ended"))
 
     def close(self) -> None:
         self._session_store.close()

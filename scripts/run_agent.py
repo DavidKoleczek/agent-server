@@ -4,7 +4,7 @@ Run the Agent standalone.
 ACTIVITIES defines a sequence of user activities to feed into the agent after that many seconds from the start.
 
 Writes:
-- Events log: temp/run_agent_<timestamp>.json at the repo root. Each client and assistant event is appended as a JSON object.
+- Events log: temp/run_agent_<timestamp>.jsonl at the repo root. Each client and assistant event is logged.
 - Working directory: WORKING_DIR if set, otherwise a temporary directory (prefixed "agent-server-") that is removed on exit. The agent reads and writes files here as instructed.
 - Session database: the agent persists chat history and activities to a SQLite db at <working_dir>/.agents/sessions/<working-dir-name>_<date>_<short-uuid>.sqlite.
 It lives inside the working directory, so it is ephemeral when the working directory is the temporary one.
@@ -30,12 +30,12 @@ WORKING_DIR: Path | None = None
 # Swap these around when needed
 
 ACTIVITIES: list[tuple[str, float]] = [
-    ("Hello!", 0),
+    ("Can you write a haiku about bears and put in bear_haiku.md?", 0),
+    ("Can you also write one about ducks in put it in duck_haiku.md", 8),
 ]
 
 ACTIVITIES: list[tuple[str, float]] = [
-    ("Can you write a haiku about bears and put in bear_haiku.md?", 0),
-    ("Can you also write one about ducks in put it in duck_haiku.md", 8),
+    ("Hello!", 0),
 ]
 
 
@@ -63,7 +63,7 @@ async def log_activities(queue: asyncio.Queue[StreamingEvent], log: Path) -> Non
 
 def _append_event(log: Path, event: dict[str, object]) -> None:
     with log.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(event, indent=2) + "\n")
+        f.write(json.dumps(event) + "\n")
 
 
 async def main() -> None:
@@ -71,7 +71,7 @@ async def main() -> None:
     agent_q: asyncio.Queue[StreamingEvent] = asyncio.Queue()
 
     EVENTS_DIR.mkdir(parents=True, exist_ok=True)
-    log = EVENTS_DIR / f"run_agent_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    log = EVENTS_DIR / f"run_agent_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
     print(f"events log: {log}")
 
     if WORKING_DIR is not None:

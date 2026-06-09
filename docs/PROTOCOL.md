@@ -20,14 +20,12 @@ ws://host:port/agent
 ## Lifecycle
 
 1. The server accepts the WebSocket connection immediately.
-2. The agent subprocess starts when the first `user_message` arrives.
-3. The agent emits `ready` followed by `turn_start` when it begins processing.
-4. During a turn, the agent streams `activity_created`, `activity_delta`, and `activity_updated` events that build up and finalize the session activities.
-5. When the turn completes, the agent emits `turn_end`.
-6. The agent subprocess exits after `turn_end`. A new subprocess is spawned when the next `user_message` arrives.
-7. Sending `cancel` kills the agent subprocess immediately.
-8. Sending `quit` closes the WebSocket connection from the server side.
-9. Invalid client messages produce an `activity_created` event wrapping an `error` activity. The connection remains open.
+2. The agent subprocess starts when the first `user_message` arrives. The server emits a `status` event with `status_id` `agent_starting`.
+3. During a turn, the agent streams `activity_created`, `activity_delta`, and `activity_updated` events that build up and finalize the session activities, interleaved with `status` events.
+4. The agent subprocess exits after `agent_run_ended`. A new subprocess is spawned when the next `user_message` arrives.
+5. Sending `cancel` kills the agent subprocess immediately.
+6. Sending `quit` closes the WebSocket connection from the server side.
+7. Invalid client messages produce an `activity_created` event wrapping an `error` activity. The connection remains open.
 
 
 ## Client Activities
@@ -72,35 +70,26 @@ Messages sent by the server to the client. All messages are JSON text frames.
 
 These are the streaming events that wrap the lifecycle signals and the evolving session activities. The session activity payloads carried inside `activity_created`, `activity_delta`, and `activity_updated` are documented under [Session Activities](#session-activities).
 
-### `ready`
+### `status`
 
-Emitted when the agent has initialized and is about to start processing.
-
-```json
-{
-  "type": "ready"
-}
-```
-
-### `turn_start`
-
-Emitted at the beginning of an agent turn. Currently the same as ready.
+Reports the agent's current lifecycle phase. The `status_id` field identifies the phase.
 
 ```json
 {
-  "type": "turn_start"
+  "type": "status",
+  "status_id": "agent_running"
 }
 ```
 
-### `turn_end`
+`status_id` is one of:
 
-Emitted when the agent has finished its turn and will imminently be returning.
-
-```json
-{
-  "type": "turn_end"
-}
-```
+- `agent_starting`: The server is spawning the agent subprocess.
+- `agent_running`: The agent has initialized and is about to start processing.
+- `starting_new_turn`: The agent is beginning a new turn.
+- `waiting_for_llm_response`: The agent has sent a request and is waiting for the model to respond.
+- `processing_llm_response`: The agent is processing the model's response.
+- `executing_tool`: The agent is executing a tool call.
+- `agent_run_ended`: The agent has finished its run and the current process will close.
 
 ### `activity_created`
 

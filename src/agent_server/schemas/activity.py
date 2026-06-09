@@ -87,18 +87,6 @@ class ActivityDelta(BaseModel):
     permission: TaskPermission | None = None
 
 
-class ReadyEvent(BaseModel):
-    type: Literal["ready"] = "ready"
-
-
-class TurnStartEvent(BaseModel):
-    type: Literal["turn_start"] = "turn_start"
-
-
-class TurnEndEvent(BaseModel):
-    type: Literal["turn_end"] = "turn_end"
-
-
 class ActivityCreatedEvent(BaseModel):
     type: Literal["activity_created"] = "activity_created"
     activity: SessionActivity
@@ -119,8 +107,19 @@ class ActivityUpdatedEvent(BaseModel):
     activity: SessionActivity
 
 
-StreamingEvent = (
-    ActivityCreatedEvent | ActivityDeltaEvent | ActivityUpdatedEvent | ReadyEvent | TurnStartEvent | TurnEndEvent
-)
+class StatusEvent(BaseModel):
+    type: Literal["status"] = "status"
+    status_id: Literal[
+        "agent_starting",
+        "agent_running",
+        "agent_run_ended",
+        "waiting_for_llm_response",
+        "processing_llm_response",
+        "executing_tool",
+        "starting_new_turn",
+    ]
+
+
+StreamingEvent = ActivityCreatedEvent | ActivityDeltaEvent | ActivityUpdatedEvent | StatusEvent
 
 # endregion

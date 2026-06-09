@@ -14,6 +14,7 @@ from agent_server.schemas.activity import (
     ActivityCreatedEvent,
     ClientEvent,
     ErrorActivity,
+    StatusEvent,
     StreamingEvent,
     UserMessageEvent,
 )
@@ -59,12 +60,13 @@ class AgentManager:
         loop = asyncio.get_running_loop()
 
         while True:
-            # Agent is not running: block until there is work, then spawn a new subprocess. The event is left
-            # set so the stdin pump observes it and flushes these initial activities once the process is up.
+            # Agent is not running: block until there is work, then spawn a new subprocess.
+            # The event is left set so the stdin pump observes it and flushes these initial activities once the process is up.
             await self._has_pending.wait()
 
             self._stderr_lines = []
             logger.info("Starting agent subprocess")
+            await self._agent_activities.put(StatusEvent(status_id="agent_starting"))
             cmd = [
                 sys.executable,
                 "-m",
