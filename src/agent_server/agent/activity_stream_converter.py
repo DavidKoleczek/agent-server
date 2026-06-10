@@ -108,7 +108,9 @@ class ActivityStreamConverter:
             self._items[event.output_index] = _StreamItem(activity_id=item.id, created=True)
             return [ActivityCreatedEvent(activity=AssistantActivity(id=item.id, state="in_progress", content=""))]
         if isinstance(item, ResponseFunctionToolCall):
-            activity_id = item.id or item.call_id
+            activity_id = item.call_id
+            if not activity_id:
+                raise ValueError("Function call stream item must include call_id.")
             self._items[event.output_index] = _StreamItem(activity_id=activity_id, created=True)
             return [
                 ActivityCreatedEvent(

@@ -176,7 +176,10 @@ class Agent:
                 # Handle tool calls by executing them and adding them to the history.
                 # TODO: Check permissions
 
-                call_id = str(msg.message.get("call_id", ""))
+                raw_call_id = msg.message.get("call_id")
+                if not isinstance(raw_call_id, str) or not raw_call_id:
+                    raise TypeError("Function call response item must include a string call_id.")
+                call_id = raw_call_id
                 arguments = json.loads(str(msg.message.get("arguments", "{}")))
 
                 tool_output = "Default output. This is indicative of an unknown error in executing the tool."
@@ -187,7 +190,6 @@ class Agent:
                     raw_tool_output = tool.execute(**arguments)
                     if inspect.iscoroutine(raw_tool_output):
                         raw_tool_output = await raw_tool_output
-                    # Convert the tool_output to a string
                     if isinstance(raw_tool_output, str):
                         tool_output = raw_tool_output
                     elif isinstance(raw_tool_output, list):
@@ -200,8 +202,7 @@ class Agent:
                 )
                 self._append_chat_message(output_message)
 
-                # Update the TaskActivity associated with this tool call. The msg id will match the TaskActivity id
-                task_activity = next((a for a in activities if isinstance(a, TaskActivity) and a.id == msg.id), None)
+                task_activity = next((a for a in activities if isinstance(a, TaskActivity) and a.id == call_id), None)
                 if task_activity is not None:
                     task_activity.state = "complete"
                     task_activity.result = tool_output

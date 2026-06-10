@@ -112,8 +112,12 @@ def _function_call_item_to_activity(message: ChatMessage, item: Mapping[str, Any
     if not isinstance(arguments, dict):
         raise TypeError(f"Function call arguments for {name} must be a JSON object.")
 
+    raw_call_id = item.get("call_id")
+    if not isinstance(raw_call_id, str) or not raw_call_id:
+        raise TypeError("Function call response item must include a string call_id.")
+
     return TaskActivity(
-        id=message.id,
+        id=raw_call_id,
         state="in_progress",
         timestamp=message.timestamp,
         name=name,
