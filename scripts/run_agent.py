@@ -24,18 +24,23 @@ from agent_server.schemas.activity import ClientEvent, StreamingEvent, UserMessa
 REPO_ROOT = Path(__file__).parents[1]
 EVENTS_DIR = REPO_ROOT / "temp"
 
-WORKING_DIR: Path | None = None
+WORKING_DIR: Path | None = REPO_ROOT
 
 # (content, delay_seconds_from_start)
 # Swap these around when needed
 
-ACTIVITIES: list[tuple[str, float]] = [
-    ("Can you write a haiku about bears and put in bear_haiku.md?", 0),
-    ("Can you also write one about ducks in put it in duck_haiku.md", 8),
-]
 
 ACTIVITIES: list[tuple[str, float]] = [
     ("Hello!", 0),
+]
+
+ACTIVITIES: list[tuple[str, float]] = [
+    ("Can you tell me what the files are in this dir?", 0),
+]
+
+ACTIVITIES: list[tuple[str, float]] = [
+    ("Can you write a haiku about bears and put in bear_haiku.md?", 0),
+    ("Can you also write one about ducks in put it in duck_haiku.md", 8),
 ]
 
 

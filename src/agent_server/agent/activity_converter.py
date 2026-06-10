@@ -114,7 +114,7 @@ def _function_call_item_to_activity(message: ChatMessage, item: Mapping[str, Any
 
     return TaskActivity(
         id=message.id,
-        state="complete",
+        state="in_progress",
         timestamp=message.timestamp,
         name=name,
         permission="accepted",

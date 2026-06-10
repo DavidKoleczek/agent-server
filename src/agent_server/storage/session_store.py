@@ -4,7 +4,7 @@ from typing import Any
 
 from interop_router.types import ChatMessage
 from pydantic import TypeAdapter
-from sqlalchemy import JSON, Column, Integer, MetaData, String, Table, create_engine, select
+from sqlalchemy import JSON, Column, Integer, MetaData, String, Table, create_engine, select, update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.engine import Engine
 
@@ -93,6 +93,25 @@ class SessionStore:
 
         with self.engine.begin() as connection:
             connection.execute(statement)
+
+    def update_activity(self, activity: SessionActivity) -> None:
+        activity_json = activity.model_dump(mode="json")
+        statement = (
+            update(activities)
+            .where(activities.c.id == activity.id)
+            .values(
+                timestamp=activity.timestamp.isoformat(),
+                type=activity.type,
+                state=activity.state,
+                activity_json=activity_json,
+            )
+        )
+
+        with self.engine.begin() as connection:
+            result = connection.execute(statement)
+
+        if result.rowcount != 1:
+            raise ValueError(f"Activity does not exist: {activity.id}")
 
     def load_chat_messages(self) -> list[ChatMessage]:
         messages: list[ChatMessage] = []

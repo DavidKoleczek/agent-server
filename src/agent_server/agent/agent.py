@@ -59,10 +59,12 @@ from agent_server.agent.activity_converter import response_to_activities
 from agent_server.agent.activity_stream_converter import ActivityStreamConverter, error_event, is_terminal_error
 from agent_server.agent.prompts.system_prompt import SYSTEM_PROMPT
 from agent_server.schemas.activity import (
+    ActivityUpdatedEvent,
     ClientEvent,
     SessionActivity,
     StatusEvent,
     StreamingEvent,
+    TaskActivity,
     TaskPermission,
     UserMessageEvent,
 )
@@ -156,12 +158,13 @@ class Agent:
                 max_output_tokens=120_000,
             )
             agent_activities.put_nowait(StatusEvent(status_id="waiting_for_llm_response"))
+            # Converts the stream of OpenAI streaming events coming from interop-router into streaming events for the client and returns the final RouterResponse.
             response = await self._handle_router_stream(stream, agent_activities)
             agent_activities.put_nowait(StatusEvent(status_id="processing_llm_response"))
             if response is None:
                 break
 
-            [self._append_activity(activity) for activity in response_to_activities(response)]
+            activities = [self._append_activity(activity) for activity in response_to_activities(response)]
 
             had_tool_call = False
             for msg in response.output:
@@ -172,24 +175,41 @@ class Agent:
 
                 # Handle tool calls by executing them and adding them to the history.
                 # TODO: Check permissions
+
                 call_id = str(msg.message.get("call_id", ""))
                 arguments = json.loads(str(msg.message.get("arguments", "{}")))
 
-                output = "Default output. This is indicative of an unknown error in executing the tool."
+                tool_output = "Default output. This is indicative of an unknown error in executing the tool."
                 tool_name = str(msg.message.get("name", ""))
                 tool = tool_by_name.get(tool_name)
                 if tool:
                     agent_activities.put_nowait(StatusEvent(status_id="executing_tool"))
-                    output = tool.execute(**arguments)
-                    if inspect.iscoroutine(output):
-                        output = await output
-                    elif isinstance(output, list):
-                        output = json.dumps(output)
+                    raw_tool_output = tool.execute(**arguments)
+                    if inspect.iscoroutine(raw_tool_output):
+                        raw_tool_output = await raw_tool_output
+                    # Convert the tool_output to a string
+                    if isinstance(raw_tool_output, str):
+                        tool_output = raw_tool_output
+                    elif isinstance(raw_tool_output, list):
+                        tool_output = json.dumps(raw_tool_output)
+                    else:
+                        tool_output = str(raw_tool_output)
 
                 output_message = ChatMessage(
-                    message=FunctionCallOutput(call_id=call_id, type="function_call_output", output=output)
+                    message=FunctionCallOutput(call_id=call_id, type="function_call_output", output=tool_output)
                 )
                 self._append_chat_message(output_message)
+
+                # Update the TaskActivity associated with this tool call. The msg id will match the TaskActivity id
+                task_activity = next((a for a in activities if isinstance(a, TaskActivity) and a.id == msg.id), None)
+                if task_activity is not None:
+                    task_activity.state = "complete"
+                    task_activity.result = tool_output
+                    self._session_store.update_activity(task_activity)
+
+                    task_updated_event = ActivityUpdatedEvent(activity=task_activity)
+                    agent_activities.put_nowait(task_updated_event)
+
                 had_tool_call = True
 
             can_break = True
