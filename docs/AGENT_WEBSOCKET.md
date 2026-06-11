@@ -1,4 +1,4 @@
-# WebSocket Protocol
+# Agent WebSocket Protocol
 
 This document specifies the WebSocket protocol used to communicate with the agent server.
 

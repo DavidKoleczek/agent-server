@@ -8,7 +8,8 @@ from agent_server.schemas.activity import ActivityState, SessionActivity, TaskPe
 
 class SessionChatMessage(BaseModel):
     """
-    Wrapper around interop-router's ChatMessage that includes additional agent-specific data.
+    interop-router view
+    A Wrapper around ChatMessage that includes additional agent-specific data used by the agent
     """
 
     position: int
@@ -20,7 +21,7 @@ class SessionChatMessage(BaseModel):
 
 class SessionActivityRecord(BaseModel):
     """
-    Client facing list of activities.
+    Client view
     """
 
     id: str
