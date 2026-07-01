@@ -258,7 +258,7 @@ class Agent:
         working_dir_name = self.config.working_dir.name
         sanitized_name = re.sub(r'[<>:"/\\|?*\s]', "_", working_dir_name)
 
-        date_str = datetime.now().strftime("%Y-%m-%d")
+        date_str = datetime.now().strftime("%Y-%m-%d-%H%M%S")
         short_uuid = str(uuid.uuid4())[:8]
         filename = f"{sanitized_name}_{date_str}_{short_uuid}.sqlite"
 
