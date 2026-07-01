@@ -20,12 +20,13 @@ ws://host:port/agent
 ## Lifecycle
 
 1. The server accepts the WebSocket connection immediately.
-2. The agent subprocess starts when the first `user_message` arrives. The server emits a `status` event with `status_id` `agent_starting`.
-3. During a turn, the agent streams `activity_created`, `activity_delta`, and `activity_updated` events that build up and finalize the session activities, interleaved with `status` events.
-4. The agent subprocess exits after `agent_run_ended`. A new subprocess is spawned when the next `user_message` arrives.
-5. Sending `cancel` kills the agent subprocess immediately.
-6. Sending `quit` closes the WebSocket connection from the server side.
-7. Invalid client messages produce an `activity_created` event wrapping an `error` activity. The connection remains open.
+2. The server starts an agent subprocess immediately and emits `agent_starting`, then `agent_ready` once the subprocess is ready.
+3. The agent subprocess stays alive for the WebSocket connection and processes `user_message` events as they arrive.
+4. During a turn, the agent streams `activity_created`, `activity_delta`, and `activity_updated` events that build up and finalize the session activities, interleaved with `status` events.
+5. Sending `cancel` kills the current agent subprocess, emits cancellation status events, and starts a fresh subprocess.
+6. Sending `quit` stops the agent subprocess and manager, then closes the WebSocket connection from the server side.
+7. If the agent subprocess exits unexpectedly, the server emits an error activity and starts a fresh subprocess.
+8. Invalid client messages produce an `activity_created` event wrapping an `error` activity. The connection remains open.
 
 
 ## Client Activities
@@ -45,7 +46,7 @@ Send a message to the agent.
 
 ### `cancel`
 
-Kill the running agent subprocess.
+Cancel the current agent run. The server kills the current agent subprocess, discards queued client events for that run, and starts a fresh subprocess.
 
 ```json
 {
@@ -55,7 +56,7 @@ Kill the running agent subprocess.
 
 ### `quit`
 
-Request the server to close the WebSocket connection.
+Request a clean shutdown. The server stops the agent subprocess and manager, then closes the WebSocket connection.
 
 ```json
 {
@@ -84,12 +85,17 @@ Reports the agent's current lifecycle phase. The `status_id` field identifies th
 `status_id` is one of:
 
 - `agent_starting`: The server is spawning the agent subprocess.
-- `agent_running`: The agent has initialized and is about to start processing.
-- `starting_new_turn`: The agent is beginning a new turn.
+- `agent_ready`: The agent subprocess has started and is ready to receive client events.
+- `agent_cancelling`: The server is cancelling the current agent subprocess.
+- `agent_cancelled`: The current agent subprocess exited due to cancellation.
+- `agent_stopping`: The server is stopping the agent subprocess for connection shutdown.
+- `agent_stopped`: The agent subprocess exited due to connection shutdown.
+- `agent_running`: The agent loop is running and waiting for or processing client events.
+- `agent_turn_ended`: The current agent turn has ended.
 - `waiting_for_llm_response`: The agent has sent a request and is waiting for the model to respond.
 - `processing_llm_response`: The agent is processing the model's response.
 - `executing_tool`: The agent is executing a tool call.
-- `agent_run_ended`: The agent has finished its run and the current process will close.
+- `starting_new_turn`: The agent is beginning a new turn.
 
 ### `activity_created`
 

@@ -104,19 +104,35 @@ class Agent:
 
         self.tools = permissive_tools(self.config.working_dir)
 
+    async def start(
+        self, client_events: asyncio.Queue[ClientEvent], streaming_events: asyncio.Queue[StreamingEvent]
+    ) -> None:
+        """Kicks off the agent and will never return.
+
+        The only ClientEvent we will handle for now is UserMessageEvent.
+        Cancel or Quit should be handled by caller by killing this. We will guarantee that we can gracefully recover from that.
+        """
+
+        while True:
+            streaming_events.put_nowait(StatusEvent(status_id="agent_running"))
+            # Block until there is a client event to process
+            client_event = await client_events.get()
+            if isinstance(client_event, UserMessageEvent):
+                msg = ChatMessage(message=EasyInputMessageParam(role="user", content=client_event.content))
+                self._append_chat_message(msg)
+                await self.run(user_activities=client_events, agent_activities=streaming_events)
+
     async def run(
         self, user_activities: asyncio.Queue[ClientEvent], agent_activities: asyncio.Queue[StreamingEvent]
     ) -> None:
         """
         Handles all the AI agent logic. It interacts with the outside world by ready and writing to user_activities and agent_activities, respectively.
         """
-        agent_activities.put_nowait(StatusEvent(status_id="agent_running"))
-
-        self._drain_user_activities(user_activities)
-        if not self.history:
-            return
 
         while True:
+            # At the start of each iteration, add any user activities that have come in.
+            self._drain_user_activities(user_activities)
+
             # Get tools ready
             agent_activities.put_nowait(StatusEvent(status_id="starting_new_turn"))
             request_tools: list[ToolParam] = [defn for tool in self.tools for defn in tool.TOOLS.values()]
@@ -226,7 +242,7 @@ class Agent:
             if can_break:
                 break
 
-        agent_activities.put_nowait(StatusEvent(status_id="agent_run_ended"))
+        agent_activities.put_nowait(StatusEvent(status_id="agent_turn_ended"))
 
     def close(self) -> None:
         self._session_store.close()

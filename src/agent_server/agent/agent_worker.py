@@ -1,5 +1,5 @@
 """
-Responsible for spawning the agent process and forwarding and receiving activities from stdin.
+A wrapper around Agent that allows it to be easily used in a separate process.
 """
 
 import argparse
@@ -28,44 +28,35 @@ async def main() -> None:
     parser.add_argument("--session-database", type=Path, default=None)
     args = parser.parse_args()
 
-    user_queue: asyncio.Queue[ClientEvent] = asyncio.Queue()
-    agent_queue: asyncio.Queue[StreamingEvent] = asyncio.Queue()
+    client_queue: asyncio.Queue[ClientEvent] = asyncio.Queue()
+    streaming_queue: asyncio.Queue[StreamingEvent] = asyncio.Queue()
 
     logger.info("Agent worker starting (working_dir={})", args.working_dir)
     config = AgentConfig(working_dir=args.working_dir, session_database=args.session_database)
     agent = Agent(config=config)
     logger.info("Agent initialized")
 
-    reader_task = asyncio.create_task(_stdin_reader(user_queue))
-    writer_task = asyncio.create_task(_stdout_writer(agent_queue))
+    reader_task = asyncio.create_task(_stdin_reader(client_queue))
+    writer_task = asyncio.create_task(_stdout_writer(streaming_queue))
+
+    exit_code = 1
     try:
-        while True:
-            # The reader thread continuously drains stdin into user_queue, so input is accepted at all times.
-            # Here we only block until there is work to begin a turn; agent.run then drains the queue itself,
-            # including any steering messages that arrive mid-turn.
-            first = await user_queue.get()
-            user_queue.put_nowait(first)
-            try:
-                await agent.run(user_queue, agent_queue)
-            except Exception:
-                logger.exception("agent.run raised an exception")
-                raise
+        await agent.start(client_queue, streaming_queue)
+        logger.error("agent.start returned unexpectedly")
+    except Exception:
+        logger.exception("agent.start raised an exception")
     finally:
         reader_task.cancel()
         writer_task.cancel()
-        exit_code = 1 if sys.exc_info()[1] is not None else 0
+        agent.close()
         try:
-            # Drain any remaining activities so the parent sees them before EOF.
-            while not agent_queue.empty():
-                activity = agent_queue.get_nowait()
+            while not streaming_queue.empty():
+                activity = streaming_queue.get_nowait()
                 line = json.dumps(activity.model_dump(mode="json")) + "\n"
                 sys.stdout.buffer.write(line.encode())
             sys.stdout.buffer.flush()
         except Exception:
             pass
-        # The _stdin_reader thread blocks on readline() from the piped stdin
-        # and cannot be interrupted. Force exit so the non-daemon thread
-        # doesn't prevent shutdown.
         os._exit(exit_code)
 
 

@@ -103,7 +103,7 @@ async def main() -> None:
             async with asyncio.TaskGroup() as tg:
                 logger_task = tg.create_task(log_activities(agent_q, log))
                 feed_task = tg.create_task(feed_activities(user_q, start_time, log))
-                await agent.run(user_q, agent_q)
+                await agent.start(user_q, agent_q)
                 await feed_task
                 await agent_q.join()
                 logger_task.cancel()

@@ -36,23 +36,23 @@ async def agent_endpoint(websocket: WebSocket) -> None:
     working_dir = Path(working_dir_param) if working_dir_param else _SERVER_DIR
     session_database = Path(session_database_param) if session_database_param else None
 
-    agent_activities: asyncio.Queue[StreamingEvent] = asyncio.Queue()
+    streaming_events: asyncio.Queue[StreamingEvent] = asyncio.Queue()
     agent_manager = AgentManager(
-        agent_activities=agent_activities,
+        streaming_events=streaming_events,
         working_dir=working_dir,
         session_database=session_database,
     )
     # Start the runner
-    runner = asyncio.create_task(agent_manager.runner())
+    agent_manager_task = asyncio.create_task(agent_manager.start_manager())
     await websocket.accept()
-    forwarder = asyncio.create_task(_forward_outbound(websocket, agent_activities))
+    forwarder = asyncio.create_task(_forward_outbound(websocket, streaming_events))
     try:
         while True:
             raw = await websocket.receive_text()
             try:
-                activity: ClientEvent = _CLIENT_ACTIVITY_ADAPTER.validate_json(raw)
+                client_event: ClientEvent = _CLIENT_ACTIVITY_ADAPTER.validate_json(raw)
             except ValidationError as exc:
-                await agent_activities.put(
+                await streaming_events.put(
                     ActivityCreatedEvent(
                         activity=ErrorActivity(
                             id=str(uuid4()),
@@ -64,29 +64,40 @@ async def agent_endpoint(websocket: WebSocket) -> None:
                 )
                 continue
 
-            match activity:
+            match client_event:
                 case UserMessageEvent():
-                    await agent_manager.submit_user_activity(activity)
+                    await agent_manager.submit_user_event(client_event)
                 case CancelEvent():
+                    # The cancel event kills the agent worker and restarts it (thus stopping any ongoing work).
                     await agent_manager.cancel()
                 case QuitEvent():
+                    # Quit is for a clean shutdown of the websocket, including properly stopping any processes.
+                    await _stop_agent_manager(agent_manager, agent_manager_task)
                     await websocket.close()
                     return
     except WebSocketDisconnect:
         return
     finally:
+        await _stop_agent_manager(agent_manager, agent_manager_task)
         forwarder.cancel()
-        runner.cancel()
 
 
 async def _forward_outbound(
     websocket: WebSocket,
-    agent_activities: asyncio.Queue[StreamingEvent],
+    streaming_events: asyncio.Queue[StreamingEvent],
 ) -> None:
     """Sole writer to the websocket. Drains the agent activities queue and sends each message as JSON."""
     try:
         while True:
-            message = await agent_activities.get()
+            message = await streaming_events.get()
             await websocket.send_json(message.model_dump(mode="json"))
     except (asyncio.CancelledError, WebSocketDisconnect):
         return
+
+
+async def _stop_agent_manager(agent_manager: AgentManager, agent_manager_task: asyncio.Task[None]) -> None:
+    """Stops the agent manager and waits for it to exit."""
+    await agent_manager.shutdown()
+    if agent_manager_task.done():
+        return
+    await agent_manager_task
