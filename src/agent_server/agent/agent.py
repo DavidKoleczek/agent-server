@@ -66,6 +66,7 @@ from agent_server.schemas.activity import (
     StreamingEvent,
     TaskActivity,
     TaskPermission,
+    UserActivity,
     UserMessageEvent,
 )
 from agent_server.schemas.session import SessionChatMessage
@@ -120,6 +121,8 @@ class Agent:
             if isinstance(client_event, UserMessageEvent):
                 msg = ChatMessage(message=EasyInputMessageParam(role="user", content=client_event.content))
                 self._append_chat_message(msg)
+                activity = UserActivity(id=str(uuid.uuid4()), state="complete", content=client_event.content)
+                self._append_activity(activity)
                 await self.run(user_activities=client_events, agent_activities=streaming_events)
 
     async def run(
@@ -297,6 +300,8 @@ class Agent:
             if isinstance(activity, UserMessageEvent):
                 msg = ChatMessage(message=EasyInputMessageParam(role="user", content=activity.content))
                 messages.append(self._append_chat_message(msg))
+                activity = UserActivity(id=str(uuid.uuid4()), state="complete", content=activity.content)
+                self._append_activity(activity)
         return messages
 
     async def _handle_router_stream(
