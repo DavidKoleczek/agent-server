@@ -1,10 +1,14 @@
 from fastapi import FastAPI
 
 from agent_server.routes.agent import router as agent_router
+from agent_server.routes.capabilities import router as capabilities_router
 from agent_server.routes.health import router as health_router
 from agent_server.routes.resume import router as resume_router
+from agent_server.routes.session_config import router as session_config_router
 
 app = FastAPI()
 app.include_router(agent_router)
+app.include_router(capabilities_router)
 app.include_router(health_router)
 app.include_router(resume_router)
+app.include_router(session_config_router)

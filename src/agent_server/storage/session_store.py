@@ -9,7 +9,7 @@ from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.engine import Engine
 
 from agent_server.schemas.activity import SessionActivity, TaskPermission
-from agent_server.schemas.session import SessionActivityRecord, SessionChatMessage
+from agent_server.schemas.session import SessionActivityRecord, SessionChatMessage, SessionConfig
 
 metadata = MetaData()
 session_activity_adapter: TypeAdapter[SessionActivity] = TypeAdapter(SessionActivity)
@@ -34,6 +34,17 @@ activities = Table(
     Column("type", String, nullable=False),
     Column("state", String, nullable=False),
     Column("activity_json", JSON, nullable=False),
+)
+
+# The config is a per-session singleton, so it always lives in a single row under this fixed key.
+SESSION_CONFIG_ID = 1
+
+session_config = Table(
+    "session_config",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("tool_preset", String, nullable=False),
+    Column("model", String, nullable=False),
 )
 
 
@@ -184,3 +195,33 @@ class SessionStore:
             )
 
         return session_activities
+
+    def update_session_config(self, config: SessionConfig) -> None:
+        values: dict[str, Any] = {
+            "id": SESSION_CONFIG_ID,
+            "tool_preset": config.tool_preset,
+            "model": config.model,
+        }
+        update_values = {key: value for key, value in values.items() if key != "id"}
+        statement = (
+            insert(session_config)
+            .values(values)
+            .on_conflict_do_update(
+                index_elements=[session_config.c.id],
+                set_=update_values,
+            )
+        )
+
+        with self.engine.begin() as connection:
+            connection.execute(statement)
+
+    def load_session_config(self) -> SessionConfig:
+        statement = select(session_config).where(session_config.c.id == SESSION_CONFIG_ID)
+
+        with self.engine.begin() as connection:
+            row = connection.execute(statement).mappings().first()
+
+        if row is None:
+            return SessionConfig()
+
+        return SessionConfig(tool_preset=row["tool_preset"], model=row["model"])

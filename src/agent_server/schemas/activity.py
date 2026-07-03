@@ -15,6 +15,12 @@ class UserMessageEvent(BaseModel):
     content: str
 
 
+class PermissionChangeEvent(BaseModel):
+    type: Literal["permission_change"] = "permission_change"
+    id: str
+    permission: TaskPermission
+
+
 class CancelEvent(BaseModel):
     type: Literal["cancel"] = "cancel"
 
@@ -23,7 +29,13 @@ class QuitEvent(BaseModel):
     type: Literal["quit"] = "quit"
 
 
-ClientEvent = UserMessageEvent | CancelEvent | QuitEvent
+class SessionConfigChangeEvent(BaseModel):
+    type: Literal["session_config_change"] = "session_config_change"
+    config_key: Literal["tool_preset", "model"]
+    new_value: str
+
+
+ClientEvent = UserMessageEvent | PermissionChangeEvent | CancelEvent | QuitEvent | SessionConfigChangeEvent
 
 # endregion
 
@@ -125,6 +137,14 @@ class StatusEvent(BaseModel):
     ]
 
 
-StreamingEvent = ActivityCreatedEvent | ActivityDeltaEvent | ActivityUpdatedEvent | StatusEvent
+class SessionConfigChangedEvent(BaseModel):
+    type: Literal["session_config_changed"] = "session_config_changed"
+    config_key: str
+    new_value: str
+
+
+StreamingEvent = (
+    ActivityCreatedEvent | ActivityDeltaEvent | ActivityUpdatedEvent | StatusEvent | SessionConfigChangedEvent
+)
 
 # endregion

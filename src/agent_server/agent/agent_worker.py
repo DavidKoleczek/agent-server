@@ -33,7 +33,8 @@ async def main() -> None:
 
     logger.info("Agent worker starting (working_dir={})", args.working_dir)
     config = AgentConfig(working_dir=args.working_dir, session_database=args.session_database)
-    agent = Agent(config=config)
+    agent = Agent(config=config, client_events=client_queue, streaming_events=streaming_queue)
+
     logger.info("Agent initialized")
 
     reader_task = asyncio.create_task(_stdin_reader(client_queue))
@@ -41,7 +42,7 @@ async def main() -> None:
 
     exit_code = 1
     try:
-        await agent.start(client_queue, streaming_queue)
+        await agent.start()
         logger.error("agent.start returned unexpectedly")
     except Exception:
         logger.exception("agent.start raised an exception")

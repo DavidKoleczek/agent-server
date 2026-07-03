@@ -72,8 +72,8 @@ def _append_event(log: Path, event: dict[str, object]) -> None:
 
 
 async def main() -> None:
-    user_q: asyncio.Queue[ClientEvent] = asyncio.Queue()
-    agent_q: asyncio.Queue[StreamingEvent] = asyncio.Queue()
+    client_events: asyncio.Queue[ClientEvent] = asyncio.Queue()
+    streaming_events: asyncio.Queue[StreamingEvent] = asyncio.Queue()
 
     EVENTS_DIR.mkdir(parents=True, exist_ok=True)
     log = EVENTS_DIR / f"run_agent_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
@@ -89,7 +89,7 @@ async def main() -> None:
         working_dir = Path(working_dir_str)
         print(f"working_dir: {working_dir}")
         config = AgentConfig(working_dir=working_dir)
-        agent = Agent(config=config)
+        agent = Agent(config=config, client_events=client_events, streaming_events=streaming_events)
         try:
             # Enqueue all immediate activities (offset=0) before starting the agent so the drain doesn't race against them.
             start_time = asyncio.get_event_loop().time()
@@ -98,14 +98,14 @@ async def main() -> None:
                     break
                 activity = UserMessageEvent(content=content)
                 _append_event(log, {"source": "client", "activity": activity.model_dump(mode="json")})
-                user_q.put_nowait(activity)
+                client_events.put_nowait(activity)
 
             async with asyncio.TaskGroup() as tg:
-                logger_task = tg.create_task(log_activities(agent_q, log))
-                feed_task = tg.create_task(feed_activities(user_q, start_time, log))
-                await agent.start(user_q, agent_q)
+                logger_task = tg.create_task(log_activities(streaming_events, log))
+                feed_task = tg.create_task(feed_activities(client_events, start_time, log))
+                await agent.start()
                 await feed_task
-                await agent_q.join()
+                await streaming_events.join()
                 logger_task.cancel()
         finally:
             agent.close()

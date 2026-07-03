@@ -1,35 +1,3 @@
-"""
-The agent needs to be initialized such that it can call itself in a sub-task.
-We need to pay attention to the code paths that will be taken when its called recursively.
-It needs to be able to recieve messages mid-task and inject those into the history so they get picked up the next iteration of the agent loop (they don't get added to sub-agents).
-
-Required Features:
-- First class Windows support
-- Skills tool: .github/skills, .claude/skills, or .agents/skills
-- Multiple models, with seamless swap in the middle of the conversation
-- Defining subagents, which can be run in parallel
-  - Ability to choose what context is passed (just from caller, last x messages, full history)
-- Bash tool that handles background tasks well
-  - General system for spawning background tasks that live in the context
-  - If something is running the background, you can come back to it and it keeps streaming and updating its spot in the history and might even send a message when its done. Sub-agents can behave similarly
-- Considers user activities (messages) that comes in right after the current LLM call (steering)
-- Computer use mode
-- Conversations as files, knows how to explore
-- Bypass permissions is the default mode, with smart restrictions
-- Infinite chat by default
-- Good plan mode
-  - Summarizes plan, but gives a link to the full plan
-  - Critique of plans with other model
-- Verifier "mode" - define criteria, and it iterates until its done
-- Ability to use ! to send commands
-- Teacher mode - does not implement, but instead explains.
-- Built in file type handling for the read tool: pdf, docx, excel, etc
-- Continual chat title refinement
-- Integration with different apps (like Fusion) - App interaction protocol
-- VSCode integration
-- /messages - Dumps the current state/history that would be used for the next message being sent to the model into a temp file that is linked.
-"""
-
 import asyncio
 import copy
 from datetime import datetime
@@ -42,7 +10,8 @@ import uuid
 
 from agent_core.hooks import git, system_info
 from agent_core.tools._protocol import Tool
-from agent_core.tools.presets import permissive_tools
+from agent_core.tools._utils import ConstraintPolicy
+from agent_core.tools.presets import permissive_tools, standard_tools
 from anthropic import AsyncAnthropic
 from google import genai
 from interop_router.router import Router
@@ -53,15 +22,19 @@ from openai.types.responses import EasyInputMessageParam
 from openai.types.responses.response_input_item_param import FunctionCallOutput
 from openai.types.responses.tool_param import ToolParam
 from openai.types.shared_params import Reasoning
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from agent_server.agent.activity_converter import response_to_activities
 from agent_server.agent.activity_stream_converter import ActivityStreamConverter, error_event, is_terminal_error
 from agent_server.agent.prompts.system_prompt import SYSTEM_PROMPT
+from agent_server.agent.prompts.tool import TOOL_AUTO_DENIED, TOOL_USER_DENIED
 from agent_server.schemas.activity import (
     ActivityUpdatedEvent,
     ClientEvent,
+    PermissionChangeEvent,
     SessionActivity,
+    SessionConfigChangedEvent,
+    SessionConfigChangeEvent,
     StatusEvent,
     StreamingEvent,
     TaskActivity,
@@ -69,7 +42,7 @@ from agent_server.schemas.activity import (
     UserActivity,
     UserMessageEvent,
 )
-from agent_server.schemas.session import SessionChatMessage
+from agent_server.schemas.session import SessionChatMessage, SessionConfig
 from agent_server.storage.session_store import SessionStore
 
 
@@ -86,13 +59,21 @@ class AgentConfig(BaseModel):
 
 
 class Agent:
-    def __init__(self, config: AgentConfig):
+    def __init__(
+        self,
+        config: AgentConfig,
+        client_events: asyncio.Queue[ClientEvent],
+        streaming_events: asyncio.Queue[StreamingEvent],
+    ):
         self.config = config
+        self.client_events = client_events
+        self.streaming_events = streaming_events
 
         self._session_database = self._resolve_session_database()
         self._session_store = SessionStore(self._session_database)
         self.history: list[SessionChatMessage] = self._session_store.load_session_chat_messages()
         self.activities: list[SessionActivity] = self._session_store.load_activities()
+        self.session_config: SessionConfig = self._session_store.load_session_config()
 
         # TODO: Temp init the router here
         self.router = Router()
@@ -100,49 +81,48 @@ class Agent:
         self.router.register("gemini", genai.Client(api_key=os.getenv("GEMINI_API_KEY")))
         self.router.register("anthropic", AsyncAnthropic())
 
-        # TODO: Set model here
-        self.model: SupportedModel = "gpt-5.5"
+        self.model: SupportedModel = self.session_config.model
 
-        self.tools = permissive_tools(self.config.working_dir)
+        self._apply_tool_preset(self.session_config.tool_preset)
 
-    async def start(
-        self, client_events: asyncio.Queue[ClientEvent], streaming_events: asyncio.Queue[StreamingEvent]
-    ) -> None:
+    async def start(self) -> None:
         """Kicks off the agent and will never return.
-
-        The only ClientEvent we will handle for now is UserMessageEvent.
         Cancel or Quit should be handled by caller by killing this. We will guarantee that we can gracefully recover from that.
         """
 
         while True:
-            streaming_events.put_nowait(StatusEvent(status_id="agent_running"))
+            self.streaming_events.put_nowait(StatusEvent(status_id="agent_running"))
             # Block until there is a client event to process
-            client_event = await client_events.get()
+            client_event = await self.client_events.get()
             if isinstance(client_event, UserMessageEvent):
                 msg = ChatMessage(message=EasyInputMessageParam(role="user", content=client_event.content))
                 self._append_chat_message(msg)
                 activity = UserActivity(id=str(uuid.uuid4()), state="complete", content=client_event.content)
                 self._append_activity(activity)
-                await self.run(user_activities=client_events, agent_activities=streaming_events)
+                await self.run()
+            elif isinstance(client_event, PermissionChangeEvent):
+                # Handle the tool call again based on the new permission by getting the associated tool call and then executing it.
+                tool_call_msg = self._get_function_call_by_id(client_event.id)
+                if tool_call_msg:
+                    await self._execute_tool_call(message=tool_call_msg, permission=client_event.permission)
+                    await self.run()
+            elif isinstance(client_event, SessionConfigChangeEvent):
+                self._handle_config_change(client_event)
 
-    async def run(
-        self, user_activities: asyncio.Queue[ClientEvent], agent_activities: asyncio.Queue[StreamingEvent]
-    ) -> None:
+    async def run(self) -> None:
         """
-        Handles all the AI agent logic. It interacts with the outside world by ready and writing to user_activities and agent_activities, respectively.
+        Handles agent turn. It interacts with the outside world by reading and writing to user_activities and agent_activities.
         """
 
         while True:
-            # At the start of each iteration, add any user activities that have come in.
-            self._drain_user_activities(user_activities)
+            self.streaming_events.put_nowait(StatusEvent(status_id="starting_new_turn"))
 
-            # Get tools ready
-            agent_activities.put_nowait(StatusEvent(status_id="starting_new_turn"))
-            request_tools: list[ToolParam] = [defn for tool in self.tools for defn in tool.TOOLS.values()]
-            tool_by_name: dict[str, Tool] = {}
-            for tool in self.tools:
-                for name in tool.TOOLS:
-                    tool_by_name[name] = tool
+            # At the start of each iteration, add any user activities that have come in.
+            await self._drain_client_events(self.client_events)
+
+            # If there's any pending tool calls, break and wait until the user approves/denies.
+            if any(isinstance(a, TaskActivity) and a.permission == "pending" for a in self.activities):
+                break
 
             # Get system prompt ready
             working_dir = str(self.config.working_dir)
@@ -173,17 +153,18 @@ class Agent:
                 stream=True,
                 reasoning=Reasoning(effort="medium", summary="auto"),
                 include=["reasoning.encrypted_content", "web_search_call.results", "web_search_call.action.sources"],
-                tools=request_tools,
+                tools=self._request_tools,
                 max_output_tokens=120_000,
             )
-            agent_activities.put_nowait(StatusEvent(status_id="waiting_for_llm_response"))
+            self.streaming_events.put_nowait(StatusEvent(status_id="waiting_for_llm_response"))
             # Converts the stream of OpenAI streaming events coming from interop-router into streaming events for the client and returns the final RouterResponse.
-            response = await self._handle_router_stream(stream, agent_activities)
-            agent_activities.put_nowait(StatusEvent(status_id="processing_llm_response"))
+            response = await self._handle_router_stream(stream, self.streaming_events)
+            self.streaming_events.put_nowait(StatusEvent(status_id="processing_llm_response"))
             if response is None:
                 break
 
-            activities = [self._append_activity(activity) for activity in response_to_activities(response)]
+            # Update the activites based on the new response.
+            [self._append_activity(activity) for activity in response_to_activities(response)]
 
             had_tool_call = False
             for msg in response.output:
@@ -192,60 +173,33 @@ class Agent:
                 if msg.message.get("type") != "function_call":
                     continue
 
-                # Handle tool calls by executing them and adding them to the history.
-                # TODO: Check permissions
-
-                raw_call_id = msg.message.get("call_id")
-                if not isinstance(raw_call_id, str) or not raw_call_id:
-                    raise TypeError("Function call response item must include a string call_id.")
-                call_id = raw_call_id
-                arguments = json.loads(str(msg.message.get("arguments", "{}")))
-
-                tool_output = "Default output. This is indicative of an unknown error in executing the tool."
-                tool_name = str(msg.message.get("name", ""))
-                tool = tool_by_name.get(tool_name)
-                if tool:
-                    agent_activities.put_nowait(StatusEvent(status_id="executing_tool"))
-                    raw_tool_output = tool.execute(**arguments)
-                    if inspect.iscoroutine(raw_tool_output):
-                        raw_tool_output = await raw_tool_output
-                    if isinstance(raw_tool_output, str):
-                        tool_output = raw_tool_output
-                    elif isinstance(raw_tool_output, list):
-                        tool_output = json.dumps(raw_tool_output)
-                    else:
-                        tool_output = str(raw_tool_output)
-
-                output_message = ChatMessage(
-                    message=FunctionCallOutput(call_id=call_id, type="function_call_output", output=tool_output)
-                )
-                self._append_chat_message(output_message)
-
-                task_activity = next((a for a in activities if isinstance(a, TaskActivity) and a.id == call_id), None)
-                if task_activity is not None:
-                    task_activity.state = "complete"
-                    task_activity.result = tool_output
-                    self._session_store.update_activity(task_activity)
-
-                    task_updated_event = ActivityUpdatedEvent(activity=task_activity)
-                    agent_activities.put_nowait(task_updated_event)
-
+                await self._execute_tool_call(msg)
                 had_tool_call = True
 
-            can_break = True
+            # Logic determining if we should break out of the current agent loop and wait for more user input.
+            break_loop = True
+            # If there were tool calls, we continue the loop so the model can process their results.
             if had_tool_call:
-                can_break = False
+                break_loop = False
 
-            # TODO: there is a chance here that we get new activities between this check and when this returns.
-            # We need some sort of lock to say we are not processing new activities right now and a new agent should be started.
-            new_activities = self._drain_user_activities(user_activities)
+            # If new user activities came in during the LLM call or tool call, like a message or tool approval, we process those right away.
+            new_activities = await self._drain_client_events(self.client_events)
             if new_activities:
-                can_break = False
+                break_loop = False
 
-            if can_break:
+            # However, if there are any pending tool calls, we can't do anything until its approved or denied so we break.
+            # Check all activities for any remaining pending tool calls.
+            pending_tool_calls = []
+            for activity in self.activities:
+                if isinstance(activity, TaskActivity) and activity.permission == "pending":
+                    pending_tool_calls.append(activity)
+            if pending_tool_calls:
+                break_loop = True
+
+            if break_loop:
                 break
 
-        agent_activities.put_nowait(StatusEvent(status_id="agent_turn_ended"))
+        self.streaming_events.put_nowait(StatusEvent(status_id="agent_turn_ended"))
 
     def close(self) -> None:
         self._session_store.close()
@@ -284,8 +238,8 @@ class Agent:
         self.activities.append(activity)
         return activity
 
-    def _drain_user_activities(self, queue: asyncio.Queue[ClientEvent]) -> list[SessionChatMessage]:
-        """Drain currently queued user message events into session chat history.
+    async def _drain_client_events(self, queue: asyncio.Queue[ClientEvent]) -> list[SessionChatMessage]:
+        """Handle all the client events that have come in since the last time we checked.
         Non-blocking: only takes items that are already available.
 
         Returns:
@@ -294,14 +248,22 @@ class Agent:
         messages: list[SessionChatMessage] = []
         while True:
             try:
-                activity = queue.get_nowait()
+                event = queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
-            if isinstance(activity, UserMessageEvent):
-                msg = ChatMessage(message=EasyInputMessageParam(role="user", content=activity.content))
+            if isinstance(event, UserMessageEvent):
+                msg = ChatMessage(message=EasyInputMessageParam(role="user", content=event.content))
                 messages.append(self._append_chat_message(msg))
-                activity = UserActivity(id=str(uuid.uuid4()), state="complete", content=activity.content)
+                activity = UserActivity(id=str(uuid.uuid4()), state="complete", content=event.content)
                 self._append_activity(activity)
+            elif isinstance(event, PermissionChangeEvent):
+                tool_call_msg = self._get_function_call_by_id(event.id)
+                if tool_call_msg:
+                    await self._execute_tool_call(message=tool_call_msg, permission=event.permission)
+
+                # SessionChatMessages are not updated here because the FunctionCallOutput should not exist yet to update its permission.
+            elif isinstance(event, SessionConfigChangeEvent):
+                self._handle_config_change(event)
         return messages
 
     async def _handle_router_stream(
@@ -325,3 +287,122 @@ class Agent:
             await agent_activities.put(error_event("router_error", str(exc)))
             return None
         return None
+
+    async def _execute_tool_call(self, message: ChatMessage, permission: TaskPermission | None = None) -> None:
+        # Get the call id and return if not present
+        call_id = message.message.get("call_id")
+        if not isinstance(call_id, str) or not call_id:
+            return
+
+        # Check if there is already a function_call_output for this call_id in the history.
+        already_resolved = any(
+            m.chat_message.message.get("type") == "function_call_output"
+            and m.chat_message.message.get("call_id") == call_id
+            for m in self.history
+        )
+        if already_resolved:
+            return
+
+        arguments = json.loads(str(message.message.get("arguments", "{}")))
+        tool_name = str(message.message.get("name", ""))
+        tool = self._tools_by_name.get(tool_name)
+
+        task_activity = next((a for a in self.activities if isinstance(a, TaskActivity) and a.id == call_id), None)
+        if task_activity is None:
+            return
+
+        tool_output = None
+        if tool and task_activity:
+            tool_policy = permission if permission else tool.check_constraint(**arguments)
+            # Handling the tool call given the current policy forthis tool
+            if tool_policy == ConstraintPolicy.DENY:
+                # Case where the tool call is automatically denied.
+                tool_output = TOOL_USER_DENIED if permission else TOOL_AUTO_DENIED
+                task_activity.state = "complete"
+                task_activity.permission = "denied"
+                task_activity.result = tool_output
+            elif tool_policy == ConstraintPolicy.ASK:
+                # Case where the tool call requires user approval.
+                task_activity.state = "in_progress"
+                task_activity.permission = "pending"
+            elif tool_policy == ConstraintPolicy.ALLOW:
+                # Case where the tool call is automatically allowed.
+                task_activity.permission = "accepted"
+                # Immediately let the client know that the tool is auto accepted and will be executed.
+                task_updated_event = ActivityUpdatedEvent(activity=task_activity)
+                self._session_store.update_activity(task_activity)
+                self.streaming_events.put_nowait(task_updated_event)
+
+                # Execute the tool
+                self.streaming_events.put_nowait(StatusEvent(status_id="executing_tool"))
+                raw_tool_output = tool.execute(**arguments)
+                if inspect.iscoroutine(raw_tool_output):
+                    raw_tool_output = await raw_tool_output
+                if isinstance(raw_tool_output, str):
+                    tool_output = raw_tool_output
+                elif isinstance(raw_tool_output, list):
+                    tool_output = json.dumps(raw_tool_output)
+                else:
+                    tool_output = str(raw_tool_output)
+
+                task_activity.state = "complete"
+                task_activity.result = tool_output
+
+            # Add the tool output to the history
+            if tool_output and task_activity.permission != "pending":
+                output_message = ChatMessage(
+                    message=FunctionCallOutput(call_id=call_id, type="function_call_output", output=tool_output)
+                )
+                self._append_chat_message(output_message, permission=task_activity.permission)
+
+            # Update the task_activity to reflect the new state
+            self._session_store.update_activity(task_activity)
+            task_updated_event = ActivityUpdatedEvent(activity=task_activity)
+            self.streaming_events.put_nowait(task_updated_event)
+
+    def _handle_config_change(self, event: SessionConfigChangeEvent) -> None:
+        """Validate a client-requested config change, persist it, and apply it to live state."""
+        updated = {**self.session_config.model_dump(), event.config_key: event.new_value}
+        try:
+            self.session_config = SessionConfig.model_validate(updated)
+        except ValidationError:
+            self.streaming_events.put_nowait(
+                error_event("invalid_config", f"Invalid value for {event.config_key}: {event.new_value}")
+            )
+            return
+
+        self._session_store.update_session_config(self.session_config)
+
+        match event.config_key:
+            case "model":
+                self.model = self.session_config.model
+            case "tool_preset":
+                self._apply_tool_preset(self.session_config.tool_preset)
+
+        applied_value = str(getattr(self.session_config, event.config_key))
+        self.streaming_events.put_nowait(
+            SessionConfigChangedEvent(config_key=event.config_key, new_value=applied_value)
+        )
+
+    def _get_function_call_by_id(self, call_id: str) -> ChatMessage | None:
+        tool_call_msg = next(
+            (
+                m.chat_message
+                for m in self.history
+                if m.chat_message.message.get("type") == "function_call"
+                and m.chat_message.message.get("call_id") == call_id
+            ),
+            None,
+        )
+        return tool_call_msg
+
+    def _apply_tool_preset(self, tool_preset: str) -> None:
+        """Rebuild the active tool set and its request/lookup indices for the given preset."""
+        tools = []
+        if tool_preset == "permissive":
+            tools = permissive_tools(self.config.working_dir)
+        elif tool_preset == "standard":
+            tools = standard_tools(self.config.working_dir)
+        self.tools = tools
+        self._request_tools: list[ToolParam] = [defn for tool in self.tools for defn in tool.TOOLS.values()]
+        self._tools_by_name: dict[str, Tool] = {name: tool for tool in self.tools for name in tool.TOOLS}
