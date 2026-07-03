@@ -33,8 +33,14 @@ async def agent_endpoint(websocket: WebSocket) -> None:
     working_dir_param = websocket.query_params.get("working_dir")
     session_database_param = websocket.query_params.get("session_database")
 
+    await websocket.accept()
+    # The client owns the session database path; reject connections that do not provide one.
+    if not session_database_param:
+        await websocket.close(code=1008, reason="session_database query parameter is required")
+        return
+
     working_dir = Path(working_dir_param) if working_dir_param else _SERVER_DIR
-    session_database = Path(session_database_param) if session_database_param else None
+    session_database = Path(session_database_param)
 
     streaming_events: asyncio.Queue[StreamingEvent] = asyncio.Queue()
     agent_manager = AgentManager(
@@ -44,7 +50,6 @@ async def agent_endpoint(websocket: WebSocket) -> None:
     )
     # Start the runner
     agent_manager_task = asyncio.create_task(agent_manager.start_manager())
-    await websocket.accept()
     forwarder = asyncio.create_task(_forward_outbound(websocket, streaming_events))
     try:
         while True:

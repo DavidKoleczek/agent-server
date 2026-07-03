@@ -55,3 +55,69 @@ displayable state of a previous session without reconnecting to the agent.
   }
 ]
 ```
+
+
+## `GET /capabilities`
+
+Advertises the session config options a client may change via the `session_config_change` client
+event. Each option lists its valid values and default so a client can render the choices. The
+response is derived from the config schema, so it always reflects the current set of options. This
+route is static and takes no parameters.
+
+### Responses
+
+- `200`: The available config options.
+
+### Example
+
+```json
+{
+  "options": [
+    {
+      "key": "tool_preset",
+      "label": "Tool Preset",
+      "values": ["permissive", "standard"],
+      "default": "permissive"
+    },
+    {
+      "key": "model",
+      "label": "Model",
+      "values": ["gpt-5.5", "claude-opus-4-7", "gemini-3.5-flash"],
+      "default": "gpt-5.5"
+    }
+  ]
+}
+```
+
+Each option carries:
+
+- `key`: The config key, matching `config_key` in a `session_config_change` client event.
+- `label`: A human-friendly display name for the key.
+- `values`: The full list of valid values for the key.
+- `default`: The value used when a session has not set this key.
+
+
+## `GET /session-config`
+
+Returns the current configuration for a session so a client can populate its initial display. Pass
+the same `session_database` used to open the `/agent` WebSocket.
+
+### Query Parameters
+
+- `session_database`: Absolute path to the existing SQLite session database. The file must already
+  exist, so call this after connecting the `/agent` WebSocket (which creates the database).
+
+### Responses
+
+- `200`: The session's current config.
+- `404`: The `session_database` file does not exist.
+- `422`: A required query parameter is missing.
+
+### Example
+
+```json
+{
+  "tool_preset": "permissive",
+  "model": "gpt-5.5"
+}
+```

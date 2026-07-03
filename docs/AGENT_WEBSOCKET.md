@@ -14,7 +14,7 @@ ws://host:port/agent
 ### Query Parameters
 
 - `working_dir`: Absolute path to the directory the agent operates in. Defaults to the server's working directory.
-- `session_database`: Absolute path to a SQLite database file for persisting session history. If omitted, a session database is created under `<working_dir>/.agents/sessions/`.
+- `session_database`: Absolute path to a SQLite database file for persisting session history. The client owns this path; if it is omitted the server rejects the connection by closing with code 1008.
 
 
 ## Lifecycle
@@ -23,10 +23,12 @@ ws://host:port/agent
 2. The server starts an agent subprocess immediately and emits `agent_starting`, then `agent_ready` once the subprocess is ready.
 3. The agent subprocess stays alive for the WebSocket connection and processes `user_message` events as they arrive.
 4. During a turn, the agent streams `activity_created`, `activity_delta`, and `activity_updated` events that build up and finalize the session activities, interleaved with `status` events.
-5. Sending `cancel` kills the current agent subprocess, emits cancellation status events, and starts a fresh subprocess.
-6. Sending `quit` stops the agent subprocess and manager, then closes the WebSocket connection from the server side.
-7. If the agent subprocess exits unexpectedly, the server emits an error activity and starts a fresh subprocess.
-8. Invalid client messages produce an `activity_created` event wrapping an `error` activity. The connection remains open.
+5. When a tool call requires approval, the agent emits a `task` activity with `permission` set to `pending` and pauses the turn until the client sends a `permission_change` event accepting or denying it, after which the turn resumes.
+6. Sending `session_config_change` updates a session setting; the server persists it, applies it to the running agent, and replies with a `session_config_changed` event.
+7. Sending `cancel` kills the current agent subprocess, emits cancellation status events, and starts a fresh subprocess.
+8. Sending `quit` stops the agent subprocess and manager, then closes the WebSocket connection from the server side.
+9. If the agent subprocess exits unexpectedly, the server emits an error activity and starts a fresh subprocess.
+10. Invalid client messages produce an `activity_created` event wrapping an `error` activity. The connection remains open.
 
 
 ## Client Activities
@@ -43,6 +45,21 @@ Send a message to the agent.
   "content": "Your message here"
 }
 ```
+
+### `permission_change`
+
+Approve or deny a pending tool call. The server re-evaluates the tool call identified by `id` using the new permission and resumes the turn.
+
+```json
+{
+  "type": "permission_change",
+  "id": "fc_123",
+  "permission": "accepted"
+}
+```
+
+- `id`: The `id` of the `task` activity (the tool call) to update.
+- `permission`: The decision for the call. One of `accepted`, `denied`, `pending`.
 
 ### `cancel`
 
@@ -63,6 +80,21 @@ Request a clean shutdown. The server stops the agent subprocess and manager, the
   "type": "quit"
 }
 ```
+
+### `session_config_change`
+
+Change a session config value. The server validates the value, persists it, applies it to the running agent, and replies with a `session_config_changed` event. An invalid value produces an `error` activity and no change. See [`GET /capabilities`](ROUTES.md#get-capabilities) for the valid keys and values.
+
+```json
+{
+  "type": "session_config_change",
+  "config_key": "model",
+  "new_value": "claude-opus-4-7"
+}
+```
+
+- `config_key`: The config key to change. One of `tool_preset`, `model`.
+- `new_value`: The new value for the key.
 
 
 ## Server Activities
@@ -142,6 +174,21 @@ Carries the complete, finalized activity, replacing any previously created or pa
   "activity": { ... }
 }
 ```
+
+### `session_config_changed`
+
+Confirms that a session config value changed, in response to a `session_config_change` client event. Carries the value that was actually applied.
+
+```json
+{
+  "type": "session_config_changed",
+  "config_key": "model",
+  "new_value": "claude-opus-4-7"
+}
+```
+
+- `config_key`: The config key that changed.
+- `new_value`: The value now in effect.
 
 
 ## Session Activities

@@ -8,14 +8,30 @@ Commands:
 
 import asyncio
 import contextlib
+from datetime import datetime
 import json
+from pathlib import Path
+import re
 import sys
 from typing import Any
+from urllib.parse import quote
+import uuid
 
 import websockets
 from websockets.asyncio.client import ClientConnection
 
-URL = "ws://127.0.0.1:8000/agent"
+
+def _session_database_path() -> Path:
+    """Mirror the server's former auto-generated session db path so this client owns an equivalent path."""
+    working_dir = Path.cwd()
+    sessions_dir = working_dir / ".agents" / "sessions"
+    sanitized_name = re.sub(r'[<>:"/\\|?*\s]', "_", working_dir.name)
+    date_str = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+    short_uuid = str(uuid.uuid4())[:8]
+    return sessions_dir / f"{sanitized_name}_{date_str}_{short_uuid}.sqlite"
+
+
+URL = f"ws://127.0.0.1:8000/agent?session_database={quote(str(_session_database_path()))}"
 
 
 async def reader(ws: ClientConnection) -> None:
