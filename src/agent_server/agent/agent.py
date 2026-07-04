@@ -313,7 +313,14 @@ class Agent:
 
         tool_output = None
         if tool and task_activity:
-            tool_policy = permission if permission else tool.check_constraint(**arguments)
+            if permission == "accepted":
+                tool_policy = ConstraintPolicy.ALLOW
+            elif permission == "denied":
+                tool_policy = ConstraintPolicy.DENY
+            elif permission == "pending":
+                tool_policy = ConstraintPolicy.ASK
+            else:
+                tool_policy = tool.check_constraint(**arguments)
             # Handling the tool call given the current policy forthis tool
             if tool_policy == ConstraintPolicy.DENY:
                 # Case where the tool call is automatically denied.
