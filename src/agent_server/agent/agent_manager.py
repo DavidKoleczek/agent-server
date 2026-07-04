@@ -10,14 +10,7 @@ from uuid import uuid4
 from loguru import logger
 from pydantic import TypeAdapter
 
-from agent_server.schemas.activity import (
-    ActivityCreatedEvent,
-    ClientEvent,
-    ErrorActivity,
-    StatusEvent,
-    StreamingEvent,
-    UserMessageEvent,
-)
+from agent_server.schemas.activity import ActivityCreatedEvent, ClientEvent, ErrorActivity, StatusEvent, StreamingEvent
 
 _STREAMING_EVENT_ADAPTER = TypeAdapter(StreamingEvent)
 
@@ -45,9 +38,9 @@ class AgentManager:
         self._cancel_requested = False
         self._shutdown_requested = False
 
-    async def submit_user_event(self, user_event: UserMessageEvent) -> None:
-        """Submits user activities to the agent. This is how the websocket endpoint sends user messages to be processed."""
-        self._client_events.append(user_event)
+    async def submit_event(self, event: ClientEvent) -> None:
+        """Forwards a client event to the running agent."""
+        self._client_events.append(event)
         self._has_client_events.set()
 
     async def cancel(self) -> None:

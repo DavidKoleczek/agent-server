@@ -11,7 +11,9 @@ from agent_server.schemas.activity import (
     CancelEvent,
     ClientEvent,
     ErrorActivity,
+    PermissionChangeEvent,
     QuitEvent,
+    SessionConfigChangeEvent,
     StreamingEvent,
     UserMessageEvent,
 )
@@ -70,8 +72,8 @@ async def agent_endpoint(websocket: WebSocket) -> None:
                 continue
 
             match client_event:
-                case UserMessageEvent():
-                    await agent_manager.submit_user_event(client_event)
+                case UserMessageEvent() | PermissionChangeEvent() | SessionConfigChangeEvent():
+                    await agent_manager.submit_event(client_event)
                 case CancelEvent():
                     # The cancel event kills the agent worker and restarts it (thus stopping any ongoing work).
                     await agent_manager.cancel()
