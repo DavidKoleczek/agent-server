@@ -9,12 +9,23 @@ authors = [
 requires-python = ">=3.13"
 dependencies = [
     "SQLAlchemy>=2.0,<2.1",
-    "agent-core-toolkit==0.1.5",
-    "fastapi[standard]>=0.136,<1.0",
+    "anthropic>=0.115,<1.0",
+    "crawl4ai[pdf]>=0.9,<1.0",
+    "fastapi[standard]>=0.139,<1.0",
+    "feedparser>=6.0,<7.0",
+    "google-genai>=2.10,<3.0",
+    "httpx>=0.28,<1.0",
     "interop-router==0.2.0",
-    "jiter>=0.15,<1.0",
+    "jiter>=0.16,<1.0",
     "loguru>=0.7,<1.0",
+    "markitdown==0.1.6",
+    "openai>=2.44,<3.0",
     "pydantic>=2.13,<3.0",
+    "pymupdf4llm>=1.28,<2.0",
+    "pymupdf>=1.28,<2.0",
+    "python-liquid>=2.2,<3.0",
+    "tree-sitter-bash>=0.25,<1.0",
+    "tree-sitter>=0.26,<1.0",
     "tzdata>=2026.2",
     "websockets>=16.0,<17.0",
 ]
@@ -25,7 +36,7 @@ agent-server = "agent_server.cli:run"
 [dependency-groups]
 dev = [
     "pytest-asyncio>=1.4",
-    "pytest>=9.0",
+    "pytest>=9.1",
     "ruff>=0.15",
     "ty>=0.0.35",
 ]
@@ -34,9 +45,19 @@ dev = [
 requires = ["uv_build>=0.11,<0.12.0"]
 build-backend = "uv_build"
 
+[tool.uv_build]
+data = [
+    { sources = [
+        "src/agent_server/core/tools/_ripgrep/LICENSE-ripgrep",
+    ], target = "agent_server/core/tools/_ripgrep" },
+    { sources = [
+        "src/agent_server/core/tools/_ripgrep/bin",
+    ], target = "agent_server/core/tools/_ripgrep/bin" },
+]
+
 [tool.uv]
 exclude-newer = "3 days"
-exclude-newer-package = { agent-core-toolkit = "2099-01-01", interop-router = "2099-01-01" }
+exclude-newer-package = { interop-router = "2099-01-01" }
 
 [tool.ruff]
 line-length = 120

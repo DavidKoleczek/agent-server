@@ -8,10 +8,6 @@ from pathlib import Path
 import re
 import uuid
 
-from agent_core.hooks import git, system_info
-from agent_core.tools._protocol import Tool
-from agent_core.tools._utils import ConstraintPolicy
-from agent_core.tools.presets import permissive_tools, standard_tools
 from anthropic import AsyncAnthropic
 from google import genai
 from interop_router.router import Router
@@ -28,6 +24,10 @@ from agent_server.agent.activity_converter import response_to_activities
 from agent_server.agent.activity_stream_converter import ActivityStreamConverter, error_event, is_terminal_error
 from agent_server.agent.prompts.system_prompt import SYSTEM_PROMPT
 from agent_server.agent.prompts.tool import TOOL_AUTO_DENIED, TOOL_USER_DENIED
+from agent_server.core.hooks import git, system_info
+from agent_server.core.tools._protocol import Tool
+from agent_server.core.tools._utils import ConstraintPolicy
+from agent_server.core.tools.presets import permissive_tools, standard_tools
 from agent_server.schemas.activity import (
     ActivityUpdatedEvent,
     ClientEvent,
