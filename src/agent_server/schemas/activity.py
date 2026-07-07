@@ -45,6 +45,7 @@ ClientEvent = UserMessageEvent | PermissionChangeEvent | CancelEvent | QuitEvent
 
 class ActivityBase(BaseModel):
     id: str
+    agent_id: str = Field(default="main")
     state: ActivityState
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 

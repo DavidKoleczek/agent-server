@@ -18,8 +18,7 @@ Liveness probe. Returns `200` once the application has started.
 
 ## `GET /resume`
 
-Loads a prior session and returns its persisted activity history. This lets a client restore the
-displayable state of a previous session without reconnecting to the agent.
+Loads a prior session and returns its persisted activity history. This lets a client restore the displayable state of a previous session without reconnecting to the agent.
 
 ### Query Parameters
 
@@ -29,9 +28,7 @@ displayable state of a previous session without reconnecting to the agent.
 
 ### Responses
 
-- `200`: A JSON array of session activity records, ordered by position. Each record carries its
-  metadata and the full activity payload documented under
-  [Session Activities](AGENT_WEBSOCKET.md#session-activities).
+- `200`: A JSON array of session activity records. Each record carries its metadata and the full activity payload documented under [Session Activities](AGENT_WEBSOCKET.md#session-activities).
 - `404`: The `session_database` file does not exist.
 - `422`: A required query parameter is missing.
 
@@ -45,8 +42,10 @@ displayable state of a previous session without reconnecting to the agent.
     "timestamp": "2026-06-10T12:51:51.123723Z",
     "type": "reasoning",
     "state": "complete",
+    "agent_id": "main",
     "activity": {
       "id": "rs_123",
+      "agent_id": "main",
       "type": "reasoning",
       "state": "complete",
       "timestamp": "2026-06-10T12:51:51.123723Z",
@@ -68,7 +67,7 @@ route is static and takes no parameters.
 
 - `200`: The available config options.
 
-### Example
+### Abbreviated Example
 
 ```json
 {
@@ -93,7 +92,7 @@ Each option carries:
 
 - `key`: The config key, matching `config_key` in a `session_config_change` client event.
 - `label`: A human-friendly display name for the key.
-- `values`: The full list of valid values for the key.
+- `values`: The full list of valid values for the key. Model values come from `interop-router`.
 - `default`: The value used when a session has not set this key.
 
 

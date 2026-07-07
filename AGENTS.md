@@ -18,6 +18,7 @@ Agent Server is a product and any development of it must have the highest standa
 - Prefer to ask the user more questions to clarify their needs.
 - NEVER store or update memories.
 - New features should be continually organized in directories and files. We want things to be modular, so if a piece does not work well its easy to replace. Files like the server entry point should remain small when possible.
+- Don't add tests to the repo unless they are asked for or planned. You can write tests adhoc to test individual components/pieces.
 
 
 # Python Development Instructions

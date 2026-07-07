@@ -25,6 +25,7 @@ from agent_server.agent.activity_stream_converter import ActivityStreamConverter
 from agent_server.agent.prompts.system_prompt import SYSTEM_PROMPT
 from agent_server.agent.prompts.tool import TOOL_AUTO_DENIED, TOOL_USER_DENIED
 from agent_server.core.hooks import git, system_info
+from agent_server.core.subagent.tool import AgentTool
 from agent_server.core.tools._protocol import Tool
 from agent_server.core.tools._utils import ConstraintPolicy
 from agent_server.core.tools.presets import permissive_tools, standard_tools
@@ -52,10 +53,6 @@ class AgentConfig(BaseModel):
         default=None,
         description="Path to the SQLite session database. If None, a new database is created in .agents/sessions.",
     )
-    max_subagent_depth: int = Field(
-        default=1,
-        description="Maximum recursion depth for sub-agents spawned via the Task Tool. 1 means only the main agent can create sub-agents.",
-    )
 
 
 class Agent:
@@ -64,15 +61,17 @@ class Agent:
         config: AgentConfig,
         client_events: asyncio.Queue[ClientEvent],
         streaming_events: asyncio.Queue[StreamingEvent],
+        agent_id: str = "main",
     ):
         self.config = config
         self.client_events = client_events
         self.streaming_events = streaming_events
+        self.agent_id = agent_id
 
         self._session_database = self._resolve_session_database()
         self._session_store = SessionStore(self._session_database)
-        self.history: list[SessionChatMessage] = self._session_store.load_session_chat_messages()
-        self.activities: list[SessionActivity] = self._session_store.load_activities()
+        self.history: list[SessionChatMessage] = self._session_store.load_session_chat_messages(agent_id=self.agent_id)
+        self.activities: list[SessionActivity] = self._session_store.load_activities(agent_id=self.agent_id)
         self.session_config: SessionConfig = self._session_store.load_session_config()
 
         # TODO: Temp init the router here
@@ -226,15 +225,18 @@ class Agent:
     ) -> SessionChatMessage:
         """Processes the given ChatMessage into the session store and in-memory history."""
         position = len(self.history)
-        self._session_store.add_chat_message(position, message, permission=permission)
-        session_message = SessionChatMessage(position=position, permission=permission, chat_message=message)
+        self._session_store.add_chat_message(position, message, permission=permission, agent_id=self.agent_id)
+        session_message = SessionChatMessage(
+            position=position, permission=permission, agent_id=self.agent_id, chat_message=message
+        )
         self.history.append(session_message)
         return session_message
 
     def _append_activity(self, activity: SessionActivity) -> SessionActivity:
         """Processes the given activity into the session store and in-memory activities"""
         position = len(self.activities)
-        self._session_store.save_activity(position, activity)
+        activity.agent_id = self.agent_id
+        self._session_store.save_activity(position, activity, agent_id=self.agent_id)
         self.activities.append(activity)
         return activity
 
@@ -410,6 +412,16 @@ class Agent:
             tools = permissive_tools(self.config.working_dir)
         elif tool_preset == "standard":
             tools = standard_tools(self.config.working_dir)
+
+        if self.agent_id == "main":
+            tools.append(
+                AgentTool(
+                    streaming_events=self.streaming_events,
+                    working_dir=self.config.working_dir,
+                    session_database=self._session_database,
+                )
+            )
+
         self.tools = tools
         self._request_tools: list[ToolParam] = [defn for tool in self.tools for defn in tool.TOOLS.values()]
         self._tools_by_name: dict[str, Tool] = {name: tool for tool in self.tools for name in tool.TOOLS}

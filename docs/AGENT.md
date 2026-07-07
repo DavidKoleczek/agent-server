@@ -14,13 +14,11 @@ from agent_server.agent.agent import AgentConfig
 config = AgentConfig(
     working_dir=Path("/path/to/project"),
     session_database=Path("conversation.sqlite"),
-    max_subagent_depth=1,
 )
 ```
 
 - `working_dir`: Directory the agent operates in.
 - `session_database`: Path to the SQLite session database. If omitted, a new database is created under `<working_dir>/.agents/sessions/`.
-- `max_subagent_depth`: Maximum recursion depth for sub-agents. `1` means only the main agent can create sub-agents.
 
 
 ## Standalone Usage
@@ -63,3 +61,10 @@ async def print_activities(queue: asyncio.Queue[StreamingEvent]):
 ```
 
 See [scripts/run_agent.py](../scripts/run_agent.py) for a complete working example that feeds timed activities and logs all events to a file.
+
+
+## Sub-agents
+
+Agents constructed with `agent_id="main"` include the `agent` tool. That tool starts a sub-agent in the same working directory and session database, gives it the requested prompt, forwards its streaming events to the caller, and returns the sub-agent's last assistant message as the tool result.
+
+Sub-agents use generated IDs like `sub-1234abcd`. Their persisted activities and chat messages use that ID, while the main agent keeps using `main`. Sub-agents do not receive the `agent` tool.

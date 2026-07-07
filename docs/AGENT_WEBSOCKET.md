@@ -24,11 +24,12 @@ ws://host:port/agent
 3. The agent subprocess stays alive for the WebSocket connection and processes `user_message` events as they arrive.
 4. During a turn, the agent streams `activity_created`, `activity_delta`, and `activity_updated` events that build up and finalize the session activities, interleaved with `status` events.
 5. When a tool call requires approval, the agent emits a `task` activity with `permission` set to `pending` and pauses the turn until the client sends a `permission_change` event accepting or denying it, after which the turn resumes.
-6. Sending `session_config_change` updates a session setting; the server persists it, applies it to the running agent, and replies with a `session_config_changed` event.
-7. Sending `cancel` kills the current agent subprocess, emits cancellation status events, and starts a fresh subprocess.
-8. Sending `quit` stops the agent subprocess and manager, then closes the WebSocket connection from the server side.
-9. If the agent subprocess exits unexpectedly, the server emits an error activity and starts a fresh subprocess.
-10. Invalid client messages produce an `activity_created` event wrapping an `error` activity. The connection remains open.
+6. When the main agent runs the `agent` tool, it starts a sub-agent. The sub-agent's streaming events are forwarded over the same WebSocket, and its session activities carry the sub-agent's `agent_id`.
+7. Sending `session_config_change` updates a session setting; the server persists it, applies it to the running agent, and replies with a `session_config_changed` event.
+8. Sending `cancel` kills the current agent subprocess, emits cancellation status events, and starts a fresh subprocess.
+9. Sending `quit` stops the agent subprocess and manager, then closes the WebSocket connection from the server side.
+10. If the agent subprocess exits unexpectedly, the server emits an error activity and starts a fresh subprocess.
+11. Invalid client messages produce an `activity_created` event wrapping an `error` activity. The connection remains open.
 
 
 ## Client Activities
@@ -147,10 +148,10 @@ Patches an existing activity. Intended for streaming efficiency, so only the fie
 ```json
 {
   "type": "activity_delta",
-  "activity_id": "msg_123",
+  "activity_id": "fc_123",
   "delta": {
     "content_delta": "appended text",
-    "argument_delta": { "key": "path", "value": "src/main.py" },
+    "argument_delta": { "key": "file_path", "value": "C:\\path\\to\\project\\src\\main.py" },
     "result_delta": "appended tool output",
     "permission": "accepted"
   }
@@ -198,6 +199,7 @@ Session activities are the persisted records of a conversation. They are deliver
 Every activity shares a common base:
 
 - `id`: Unique identifier for the activity.
+- `agent_id`: Identifier for the agent that produced the activity. The main agent uses `main`; sub-agents use generated IDs like `sub-1234abcd`.
 - `type`: The activity type, one of the values below.
 - `state`: Lifecycle state, one of `in_progress`, `complete`, `error`, `cancelled`.
 - `timestamp`: ISO 8601 timestamp in UTC.
@@ -209,6 +211,7 @@ A message from the user.
 ```json
 {
   "id": "msg_123",
+  "agent_id": "main",
   "type": "user",
   "state": "complete",
   "timestamp": "2026-06-05T12:00:00Z",
@@ -223,6 +226,7 @@ A message from the model.
 ```json
 {
   "id": "msg_123",
+  "agent_id": "main",
   "type": "assistant",
   "state": "complete",
   "timestamp": "2026-06-05T12:00:00Z",
@@ -237,6 +241,7 @@ A reasoning summary from the model.
 ```json
 {
   "id": "rs_123",
+  "agent_id": "main",
   "type": "reasoning",
   "state": "complete",
   "timestamp": "2026-06-05T12:00:00Z",
@@ -251,12 +256,13 @@ A tool call made by the agent.
 ```json
 {
   "id": "fc_123",
+  "agent_id": "main",
   "type": "task",
   "state": "complete",
   "timestamp": "2026-06-05T12:00:00Z",
-  "name": "read_file",
+  "name": "read",
   "permission": "accepted",
-  "arguments": { "path": "src/main.py" },
+  "arguments": { "file_path": "C:\\path\\to\\project\\src\\main.py" },
   "result": "file contents"
 }
 ```
@@ -266,6 +272,8 @@ A tool call made by the agent.
 - `arguments`: The tool call arguments as a JSON object, or `null` until they are known.
 - `result`: The tool output, or `null` until the call completes.
 
+For sub-agent calls, `name` is `agent`, `arguments` contains `description`, `prompt`, and `subagent_type`, and `result` is the sub-agent's final assistant message.
+
 ### `error`
 
 An error surfaced as an activity.
@@ -273,6 +281,7 @@ An error surfaced as an activity.
 ```json
 {
   "id": "err_123",
+  "agent_id": "main",
   "type": "error",
   "state": "error",
   "timestamp": "2026-06-05T12:00:00Z",

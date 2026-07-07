@@ -43,6 +43,10 @@ ACTIVITIES: list[tuple[str, float]] = [
     ("Can you also write one about ducks in put it in duck_haiku.md", 8),
 ]
 
+ACTIVITIES: list[tuple[str, float]] = [
+    ("Can use an agent to explore and figure out what this code base is about? Be brief.", 0),
+]
+
 
 async def feed_activities(queue: asyncio.Queue[ClientEvent], start_time: float, log: Path) -> None:
     for content, offset in ACTIVITIES:

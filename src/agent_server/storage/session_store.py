@@ -4,7 +4,7 @@ from typing import Any
 
 from interop_router.types import ChatMessage
 from pydantic import TypeAdapter
-from sqlalchemy import JSON, Column, Integer, MetaData, String, Table, create_engine, select, update
+from sqlalchemy import JSON, Column, Integer, MetaData, String, Table, UniqueConstraint, create_engine, select, update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.engine import Engine
 
@@ -18,22 +18,26 @@ chat_messages = Table(
     "chat_messages",
     metadata,
     Column("id", String, primary_key=True),
-    Column("position", Integer, nullable=False, unique=True),
+    Column("position", Integer, nullable=False),
     Column("timestamp", String, nullable=False),
     Column("created_by", String, nullable=False),
     Column("permission", String, nullable=True),
+    Column("agent_id", String, nullable=False),
     Column("chat_message", JSON, nullable=False),
+    UniqueConstraint("agent_id", "position"),
 )
 
 activities = Table(
     "activities",
     metadata,
     Column("id", String, primary_key=True),
-    Column("position", Integer, nullable=False, unique=True),
+    Column("position", Integer, nullable=False),
     Column("timestamp", String, nullable=False),
     Column("type", String, nullable=False),
     Column("state", String, nullable=False),
+    Column("agent_id", String, nullable=False),
     Column("activity_json", JSON, nullable=False),
+    UniqueConstraint("agent_id", "position"),
 )
 
 # The config is a per-session singleton, so it always lives in a single row under this fixed key.
@@ -65,7 +69,13 @@ class SessionStore:
     def close(self) -> None:
         self.engine.dispose()
 
-    def add_chat_message(self, position: int, message: ChatMessage, permission: TaskPermission | None = None) -> None:
+    def add_chat_message(
+        self,
+        position: int,
+        message: ChatMessage,
+        permission: TaskPermission | None = None,
+        agent_id: str = "main",
+    ) -> None:
         chat_message: Any = json.loads(message.model_dump_json())
         if not isinstance(chat_message, dict):
             raise TypeError("Serialized ChatMessage must be a JSON object.")
@@ -78,11 +88,12 @@ class SessionStore:
                     timestamp=message.timestamp.isoformat(),
                     created_by=message.created_by,
                     permission=permission,
+                    agent_id=agent_id,
                     chat_message=chat_message,
                 )
             )
 
-    def save_activity(self, position: int, activity: SessionActivity) -> None:
+    def save_activity(self, position: int, activity: SessionActivity, agent_id: str = "main") -> None:
         activity_json = activity.model_dump(mode="json")
         values: dict[str, Any] = {
             "id": activity.id,
@@ -90,6 +101,7 @@ class SessionStore:
             "type": activity.type,
             "state": activity.state,
             "timestamp": activity.timestamp.isoformat(),
+            "agent_id": agent_id,
             "activity_json": activity_json,
         }
         update_values = {key: value for key, value in values.items() if key != "id"}
@@ -105,18 +117,18 @@ class SessionStore:
         with self.engine.begin() as connection:
             connection.execute(statement)
 
-    def update_activity(self, activity: SessionActivity) -> None:
+    def update_activity(self, activity: SessionActivity, agent_id: str | None = None) -> None:
         activity_json = activity.model_dump(mode="json")
-        statement = (
-            update(activities)
-            .where(activities.c.id == activity.id)
-            .values(
-                timestamp=activity.timestamp.isoformat(),
-                type=activity.type,
-                state=activity.state,
-                activity_json=activity_json,
-            )
-        )
+        values: dict[str, Any] = {
+            "timestamp": activity.timestamp.isoformat(),
+            "type": activity.type,
+            "state": activity.state,
+            "activity_json": activity_json,
+        }
+        if agent_id is not None:
+            values["agent_id"] = agent_id
+
+        statement = update(activities).where(activities.c.id == activity.id).values(values)
 
         with self.engine.begin() as connection:
             result = connection.execute(statement)
@@ -124,15 +136,22 @@ class SessionStore:
         if result.rowcount != 1:
             raise ValueError(f"Activity does not exist: {activity.id}")
 
-    def load_chat_messages(self) -> list[ChatMessage]:
+    def load_chat_messages(self, agent_id: str | None = None) -> list[ChatMessage]:
         messages: list[ChatMessage] = []
-        for message in self.load_session_chat_messages():
+        for message in self.load_session_chat_messages(agent_id=agent_id):
             messages.append(message.chat_message)
 
         return messages
 
-    def load_session_chat_messages(self) -> list[SessionChatMessage]:
-        statement = select(chat_messages).order_by(chat_messages.c.position)
+    def load_session_chat_messages(self, agent_id: str | None = None) -> list[SessionChatMessage]:
+        statement = select(chat_messages)
+        if agent_id is not None:
+            statement = statement.where(chat_messages.c.agent_id == agent_id)
+            statement = statement.order_by(chat_messages.c.position)
+        else:
+            statement = statement.order_by(
+                chat_messages.c.timestamp, chat_messages.c.agent_id, chat_messages.c.position
+            )
 
         with self.engine.begin() as connection:
             rows = connection.execute(statement).mappings().all()
@@ -157,21 +176,27 @@ class SessionStore:
                 SessionChatMessage(
                     position=int(row["position"]),
                     permission=permission,
+                    agent_id=str(row["agent_id"]),
                     chat_message=ChatMessage.from_json(json.dumps(chat_message)),
                 )
             )
 
         return session_chat_messages
 
-    def load_activities(self) -> list[SessionActivity]:
+    def load_activities(self, agent_id: str | None = None) -> list[SessionActivity]:
         activities_list: list[SessionActivity] = []
-        for activity in self.load_session_activities():
+        for activity in self.load_session_activities(agent_id=agent_id):
             activities_list.append(activity.activity)
 
         return activities_list
 
-    def load_session_activities(self) -> list[SessionActivityRecord]:
-        statement = select(activities).order_by(activities.c.position)
+    def load_session_activities(self, agent_id: str | None = None) -> list[SessionActivityRecord]:
+        statement = select(activities)
+        if agent_id is not None:
+            statement = statement.where(activities.c.agent_id == agent_id)
+            statement = statement.order_by(activities.c.position)
+        else:
+            statement = statement.order_by(activities.c.timestamp, activities.c.agent_id, activities.c.position)
 
         with self.engine.begin() as connection:
             rows = connection.execute(statement).mappings().all()
@@ -191,6 +216,7 @@ class SessionStore:
                     state=activity.state,
                     timestamp=row["timestamp"],
                     activity=activity,
+                    agent_id=str(row["agent_id"]),
                 )
             )
 

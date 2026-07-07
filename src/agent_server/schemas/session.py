@@ -18,6 +18,7 @@ class SessionChatMessage(BaseModel):
     permission: TaskPermission | None = Field(
         default=None, description="The permission associated with this message, if any."
     )
+    agent_id: str = Field(default="main")
     chat_message: ChatMessage
 
 
@@ -32,6 +33,7 @@ class SessionActivityRecord(BaseModel):
     type: str
     state: ActivityState
     activity: SessionActivity
+    agent_id: str = Field(default="main")
 
 
 class SessionConfig(BaseModel):

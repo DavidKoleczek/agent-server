@@ -26,6 +26,7 @@ async def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--working-dir", type=Path, required=True)
     parser.add_argument("--session-database", type=Path, default=None)
+    parser.add_argument("--agent-id", type=str, default="main")
     args = parser.parse_args()
 
     client_queue: asyncio.Queue[ClientEvent] = asyncio.Queue()
@@ -33,7 +34,7 @@ async def main() -> None:
 
     logger.info("Agent worker starting (working_dir={})", args.working_dir)
     config = AgentConfig(working_dir=args.working_dir, session_database=args.session_database)
-    agent = Agent(config=config, client_events=client_queue, streaming_events=streaming_queue)
+    agent = Agent(config=config, client_events=client_queue, streaming_events=streaming_queue, agent_id=args.agent_id)
 
     logger.info("Agent initialized")
 

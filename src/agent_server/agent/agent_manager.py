@@ -21,6 +21,7 @@ class AgentManager:
         streaming_events: asyncio.Queue[StreamingEvent],
         working_dir: Path,
         session_database: Path | None = None,
+        agent_id: str = "main",
     ):
         # A list of user activities that have not been forwarded to the agent yet.
         self._client_events: deque[ClientEvent] = deque()
@@ -37,6 +38,8 @@ class AgentManager:
         # between an issue with the process and a user-initiated cancellation. Similar for shutdown.
         self._cancel_requested = False
         self._shutdown_requested = False
+
+        self.agent_id = agent_id
 
     async def submit_event(self, event: ClientEvent) -> None:
         """Forwards a client event to the running agent."""
@@ -86,6 +89,8 @@ class AgentManager:
                 "agent_server.agent.agent_worker",
                 "--working-dir",
                 str(self._working_dir),
+                "--agent-id",
+                self.agent_id,
             ]
             if self._session_database is not None:
                 cmd.extend(["--session-database", str(self._session_database)])
