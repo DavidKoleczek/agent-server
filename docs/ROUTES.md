@@ -103,8 +103,8 @@ the same `session_database` used to open the `/agent` WebSocket.
 
 ### Query Parameters
 
-- `session_database`: Absolute path to the existing SQLite session database. The file must already
-  exist, so call this after connecting the `/agent` WebSocket (which creates the database).
+- `session_database`: Absolute path to the existing SQLite session database. The file must already exist. 
+  - For a new session, call this after the `/agent` WebSocket emits `agent_ready` which confirms that the worker initialized the database.
 
 ### Responses
 

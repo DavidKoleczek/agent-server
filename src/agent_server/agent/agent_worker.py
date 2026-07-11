@@ -15,7 +15,14 @@ from loguru import logger
 from pydantic import TypeAdapter
 
 from agent_server.agent.agent import Agent, AgentConfig
-from agent_server.schemas.activity import ClientEvent, StreamingEvent
+from agent_server.agent.processes.managed_worker_process import wait_for_start_signal
+from agent_server.schemas.activity import (
+    ActivityCreatedEvent,
+    ActivityUpdatedEvent,
+    ClientEvent,
+    StatusEvent,
+    StreamingEvent,
+)
 
 _USER_ACTIVITY_ADAPTER = TypeAdapter(ClientEvent)
 
@@ -27,7 +34,11 @@ async def main() -> None:
     parser.add_argument("--working-dir", type=Path, required=True)
     parser.add_argument("--session-database", type=Path, default=None)
     parser.add_argument("--agent-id", type=str, default="main")
+    parser.add_argument("--managed", action="store_true")
     args = parser.parse_args()
+
+    if args.managed and not wait_for_start_signal():
+        return
 
     client_queue: asyncio.Queue[ClientEvent] = asyncio.Queue()
     streaming_queue: asyncio.Queue[StreamingEvent] = asyncio.Queue()
@@ -39,7 +50,8 @@ async def main() -> None:
     logger.info("Agent initialized")
 
     reader_task = asyncio.create_task(_stdin_reader(client_queue))
-    writer_task = asyncio.create_task(_stdout_writer(streaming_queue))
+    writer_task = asyncio.create_task(_stdout_writer(streaming_queue, args.agent_id))
+    streaming_queue.put_nowait(StatusEvent(agent_id=args.agent_id, status_id="agent_ready"))
 
     exit_code = 1
     try:
@@ -53,7 +65,7 @@ async def main() -> None:
         agent.close()
         try:
             while not streaming_queue.empty():
-                activity = streaming_queue.get_nowait()
+                activity = _attribute_streaming_event(streaming_queue.get_nowait(), args.agent_id)
                 line = json.dumps(activity.model_dump(mode="json")) + "\n"
                 sys.stdout.buffer.write(line.encode())
             sys.stdout.buffer.flush()
@@ -80,15 +92,22 @@ def _patch_subprocess_default_stdin() -> None:
     type.__setattr__(subprocess.Popen, "__init__", _patched_init)
 
 
-async def _stdout_writer(queue: asyncio.Queue[StreamingEvent]) -> None:
+async def _stdout_writer(queue: asyncio.Queue[StreamingEvent], agent_id: str) -> None:
     def _write(payload: bytes) -> None:
         sys.stdout.buffer.write(payload)
         sys.stdout.buffer.flush()
 
     while True:
-        activity = await queue.get()
+        activity = _attribute_streaming_event(await queue.get(), agent_id)
         line = json.dumps(activity.model_dump(mode="json")) + "\n"
         await asyncio.to_thread(_write, line.encode())
+
+
+def _attribute_streaming_event(event: StreamingEvent, agent_id: str) -> StreamingEvent:
+    event.agent_id = agent_id
+    if isinstance(event, ActivityCreatedEvent | ActivityUpdatedEvent):
+        event.activity.agent_id = agent_id
+    return event
 
 
 async def _stdin_reader(queue: asyncio.Queue[ClientEvent]) -> None:

@@ -1,7 +1,8 @@
 import asyncio
 from collections import deque
+from contextlib import suppress
+from dataclasses import dataclass, field
 from pathlib import Path
-import subprocess
 import sys
 import threading
 from typing import IO
@@ -10,9 +11,76 @@ from uuid import uuid4
 from loguru import logger
 from pydantic import TypeAdapter
 
+from agent_server.agent.processes.managed_worker_process import ManagedWorkerProcess
 from agent_server.schemas.activity import ActivityCreatedEvent, ClientEvent, ErrorActivity, StatusEvent, StreamingEvent
 
 _STREAMING_EVENT_ADAPTER = TypeAdapter(StreamingEvent)
+_RESTART_BACKOFF_INITIAL_SECONDS = 1.0
+_RESTART_BACKOFF_MAX_SECONDS = 30.0
+_RESTART_BACKOFF_RESET_SECONDS = 60.0
+
+
+@dataclass(slots=True)
+class _RunningWorker:
+    """Owns the process and supporting tasks for one worker run so they are always cleaned up together."""
+
+    process: ManagedWorkerProcess
+    wait_task: asyncio.Task[int]
+    stdout_thread: threading.Thread
+    stderr_thread: threading.Thread
+    stderr_lines: list[str]
+    writer_task: asyncio.Task[None] | None = None
+    cancel_requested: bool = False
+    _closed: bool = field(default=False, init=False)
+
+    async def wait(self) -> int:
+        return await asyncio.shield(self.wait_task)
+
+    async def terminate(self) -> None:
+        self.process.terminate_tree()
+        await self.wait()
+
+    async def close(self) -> None:
+        if self._closed:
+            return
+        try:
+            self.process.terminate_tree()
+        finally:
+            await self._finish_cleanup()
+        self._closed = True
+
+    async def _finish_cleanup(self) -> None:
+        try:
+            await self.wait()
+        finally:
+            await self._close_io()
+
+    async def _close_io(self) -> None:
+        try:
+            if self.writer_task is not None:
+                self.writer_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await self.writer_task
+        finally:
+            try:
+                await self._join_thread(self.stdout_thread)
+                await self._join_thread(self.stderr_thread)
+            finally:
+                self.process.close()
+
+    @staticmethod
+    async def _join_thread(thread: threading.Thread) -> None:
+        if thread.ident is not None:
+            await asyncio.to_thread(thread.join)
+
+
+@dataclass(frozen=True, slots=True)
+class _WorkerRunResult:
+    became_ready: bool
+    returncode: int
+    runtime_seconds: float
+    cancel_requested: bool
+    stderr_lines: tuple[str, ...]
 
 
 class AgentManager:
@@ -22,24 +90,22 @@ class AgentManager:
         working_dir: Path,
         session_database: Path | None = None,
         agent_id: str = "main",
-    ):
+        process_tree_root: bool = True,
+    ) -> None:
+
+        self._streaming_events = streaming_events
+        self._working_dir = working_dir
+        self._session_database = session_database
+        self.agent_id = agent_id
+        # On POSIX, root managers create the process group while sub-agent managers join it for recursive cancellation.
+        self._process_tree_root = process_tree_root
+
         # A list of user activities that have not been forwarded to the agent yet.
         self._client_events: deque[ClientEvent] = deque()
         # This indicates whether there are pending activities that need to be forwarded. This is used to avoid polling on the pending queue.
         self._has_client_events = asyncio.Event()
-        self._streaming_events = streaming_events
-
-        self._working_dir = working_dir
-        self._session_database = session_database
-        self._proc: subprocess.Popen[bytes] | None = None
-        self._writer_task: asyncio.Task[None] | None = None
-        self._stderr_lines: list[str] = []
-        # We use a flag to indicate that a cancellation was requested so we can differentiate
-        # between an issue with the process and a user-initiated cancellation. Similar for shutdown.
-        self._cancel_requested = False
-        self._shutdown_requested = False
-
-        self.agent_id = agent_id
+        self._worker: _RunningWorker | None = None
+        self._shutdown_event = asyncio.Event()
 
     async def submit_event(self, event: ClientEvent) -> None:
         """Forwards a client event to the running agent."""
@@ -48,131 +114,182 @@ class AgentManager:
 
     async def cancel(self) -> None:
         """Immediately kills the agent and any of its sub-agents."""
-        proc = self._proc
-        if proc is not None and proc.poll() is None:
+        worker = self._worker
+        if worker is not None and worker.process.poll() is None:
             self._client_events.clear()
             self._has_client_events.clear()
-            self._cancel_requested = True
-            await self._streaming_events.put(StatusEvent(status_id="agent_cancelling"))
-            proc.kill()
-            await asyncio.to_thread(proc.wait)
+            worker.cancel_requested = True
+            await self._streaming_events.put(StatusEvent(agent_id=self.agent_id, status_id="agent_cancelling"))
+            await worker.terminate()
 
     async def shutdown(self) -> None:
         """Stops the agent subprocess and prevents it from restarting."""
-        shutdown_started = not self._shutdown_requested
-        self._shutdown_requested = True
+        shutdown_started = not self._shutdown_event.is_set()
+        self._shutdown_event.set()
         self._client_events.clear()
         self._has_client_events.clear()
 
-        proc = self._proc
-        if proc is not None and proc.poll() is None:
-            if shutdown_started:
-                await self._streaming_events.put(StatusEvent(status_id="agent_stopping"))
-            proc.kill()
-            await asyncio.to_thread(proc.wait)
+        worker = self._worker
+        if worker is not None:
+            if shutdown_started and worker.process.poll() is None:
+                await self._streaming_events.put(StatusEvent(agent_id=self.agent_id, status_id="agent_stopping"))
+            await worker.terminate()
 
     async def start_manager(self) -> None:
         """Starts the agent subprocess and manages its lifecycle. If the agent exits, it will be restarted."""
-        while True:
-            if self._shutdown_requested:
-                break
+        restart_delay = _RESTART_BACKOFF_INITIAL_SECONDS
+        try:
+            while not self._shutdown_event.is_set():
+                logger.info("Starting agent subprocess")
+                await self._streaming_events.put(StatusEvent(agent_id=self.agent_id, status_id="agent_starting"))
+                result = await self._run_worker_once()
+                await self._report_worker_exit(result)
 
-            self._stderr_lines = []
+                if self._shutdown_event.is_set():
+                    return
+                if result.cancel_requested:
+                    restart_delay = _RESTART_BACKOFF_INITIAL_SECONDS
+                    continue
+                if result.became_ready and result.runtime_seconds >= _RESTART_BACKOFF_RESET_SECONDS:
+                    restart_delay = _RESTART_BACKOFF_INITIAL_SECONDS
 
-            logger.info("Starting agent subprocess")
-            await self._streaming_events.put(StatusEvent(status_id="agent_starting"))
-
-            # Start the agent_worker process which will start the agent and forward events to it.
-            cmd = [
-                sys.executable,
-                "-m",
-                "agent_server.agent.agent_worker",
-                "--working-dir",
-                str(self._working_dir),
-                "--agent-id",
-                self.agent_id,
-            ]
-            if self._session_database is not None:
-                cmd.extend(["--session-database", str(self._session_database)])
-            proc = subprocess.Popen(
-                cmd,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-            self._proc = proc
-
-            loop = asyncio.get_running_loop()
-            # We communicate with the agent worker through its stdin and stdout.
-            # Start threads to read from stdout and stderr
-            stdout_eof = asyncio.Event()
-            stdout_thread = threading.Thread(
-                target=self._read_stdout, args=(proc, loop, stdout_eof), name="agent-stdout", daemon=True
-            )
-            stderr_thread = threading.Thread(target=self._read_stderr, args=(proc,), name="agent-stderr", daemon=True)
-            stdout_thread.start()
-            stderr_thread.start()
-
-            # Start a task to forward pending events to the agent's stdin.
-            self._writer_task = asyncio.create_task(self._pump_stdin(proc))
-
-            # Wait until we reach EOF on stdout which indicates the agent has exited. Set by _read_stdout
-            # If the agent exits, we will then go back throught the loop starting the worker process again.
-            try:
-                await self._streaming_events.put(StatusEvent(status_id="agent_ready"))
-                await stdout_eof.wait()
-                await asyncio.to_thread(proc.wait)
-                await asyncio.to_thread(stdout_thread.join)
-                await asyncio.to_thread(stderr_thread.join)
-            except asyncio.CancelledError:
-                self._shutdown_requested = True
-                if proc.poll() is None:
-                    proc.kill()
-                    await asyncio.to_thread(proc.wait)
-                    await asyncio.to_thread(stdout_thread.join)
-                    await asyncio.to_thread(stderr_thread.join)
-                raise
-            finally:
-                self._writer_task.cancel()
-
-                returncode = proc.returncode
-                cancel_requested = self._cancel_requested
-                self._cancel_requested = False
-                if self._shutdown_requested:
-                    logger.info("Agent subprocess exited due to shutdown")
-                    await self._streaming_events.put(StatusEvent(status_id="agent_stopped"))
-                elif cancel_requested:
-                    logger.info("Agent subprocess exited due to cancellation")
-                    await self._streaming_events.put(StatusEvent(status_id="agent_cancelled"))
-                elif returncode is not None and returncode != 0:
-                    logger.error("Agent subprocess crashed (exit code {})", returncode)
-                    detail = (
-                        "\n".join(self._stderr_lines)
-                        if self._stderr_lines
-                        else f"Process exited with code {returncode}"
-                    )
-                    await self._streaming_events.put(
-                        ActivityCreatedEvent(
-                            activity=ErrorActivity(
-                                id=str(uuid4()),
-                                state="error",
-                                error_type="agent_error",
-                                detail=detail,
-                            )
-                        )
-                    )
+                logger.warning("Restarting agent subprocess in {} seconds", restart_delay)
+                try:
+                    await asyncio.wait_for(self._shutdown_event.wait(), timeout=restart_delay)
+                except TimeoutError:
+                    restart_delay = min(restart_delay * 2, _RESTART_BACKOFF_MAX_SECONDS)
                 else:
-                    logger.info("Agent subprocess exited normally")
+                    return
+        except asyncio.CancelledError:
+            self._shutdown_event.set()
+            logger.info("Agent subprocess exited due to shutdown")
+            await self._streaming_events.put(StatusEvent(agent_id=self.agent_id, status_id="agent_stopped"))
+            raise
 
-                self._proc = None
-                self._writer_task = None
+    async def _run_worker_once(self) -> _WorkerRunResult:
+        loop = asyncio.get_running_loop()
+        started_at = loop.time()
+        worker_ready = asyncio.Event()
+        worker = await self._start_worker(worker_ready)
+        try:
+            became_ready = await self._wait_for_worker_ready_or_exit(worker_ready, worker.wait_task)
+            if became_ready:
+                # Do not forward queued events until the worker has initialized and can consume them.
+                worker.writer_task = asyncio.create_task(self._pump_stdin(worker))
+            returncode = await worker.wait()
+        finally:
+            await worker.close()
+            if self._worker is worker:
+                self._worker = None
 
-            if self._shutdown_requested:
-                break
+        return _WorkerRunResult(
+            became_ready=became_ready,
+            returncode=returncode,
+            runtime_seconds=loop.time() - started_at,
+            cancel_requested=worker.cancel_requested,
+            stderr_lines=tuple(worker.stderr_lines),
+        )
 
-    async def _pump_stdin(self, proc: subprocess.Popen[bytes]) -> None:
+    async def _start_worker(self, worker_ready: asyncio.Event) -> _RunningWorker:
+        process = ManagedWorkerProcess.start(
+            self._worker_command(),
+            process_tree_root=self._process_tree_root,
+        )
+        stderr_lines: list[str] = []
+        loop = asyncio.get_running_loop()
+        worker = _RunningWorker(
+            process=process,
+            wait_task=asyncio.create_task(asyncio.to_thread(process.wait)),
+            stdout_thread=threading.Thread(
+                target=self._read_stdout,
+                args=(process, loop, worker_ready),
+                name="agent-stdout",
+                daemon=True,
+            ),
+            stderr_thread=threading.Thread(
+                target=self._read_stderr,
+                args=(process, stderr_lines),
+                name="agent-stderr",
+                daemon=True,
+            ),
+            stderr_lines=stderr_lines,
+        )
+        self._worker = worker
+        try:
+            worker.stdout_thread.start()
+            worker.stderr_thread.start()
+        except Exception:
+            await worker.close()
+            self._worker = None
+            raise
+        return worker
+
+    def _worker_command(self) -> list[str]:
+        command = [
+            sys.executable,
+            "-m",
+            "agent_server.agent.agent_worker",
+            "--working-dir",
+            str(self._working_dir),
+            "--agent-id",
+            self.agent_id,
+            "--managed",
+        ]
+        if self._session_database is not None:
+            command.extend(["--session-database", str(self._session_database)])
+        return command
+
+    async def _report_worker_exit(self, result: _WorkerRunResult) -> None:
+        if self._shutdown_event.is_set():
+            logger.info("Agent subprocess exited due to shutdown")
+            await self._streaming_events.put(StatusEvent(agent_id=self.agent_id, status_id="agent_stopped"))
+        elif result.cancel_requested:
+            logger.info("Agent subprocess exited due to cancellation")
+            await self._streaming_events.put(StatusEvent(agent_id=self.agent_id, status_id="agent_cancelled"))
+        elif result.returncode != 0:
+            logger.error("Agent subprocess crashed (exit code {})", result.returncode)
+            detail = (
+                "\n".join(result.stderr_lines)
+                if result.stderr_lines
+                else f"Process exited with code {result.returncode}"
+            )
+            await self._streaming_events.put(
+                ActivityCreatedEvent(
+                    agent_id=self.agent_id,
+                    activity=ErrorActivity(
+                        id=str(uuid4()),
+                        agent_id=self.agent_id,
+                        state="error",
+                        error_type="agent_error",
+                        detail=detail,
+                    ),
+                )
+            )
+        else:
+            logger.info("Agent subprocess exited normally")
+
+    @staticmethod
+    async def _wait_for_worker_ready_or_exit(
+        worker_ready: asyncio.Event,
+        process_wait_task: asyncio.Task[int],
+    ) -> bool:
+        ready_task = asyncio.create_task(worker_ready.wait())
+        try:
+            done, _ = await asyncio.wait(
+                {ready_task, process_wait_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            return ready_task in done and worker_ready.is_set()
+        finally:
+            if not ready_task.done():
+                ready_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await ready_task
+
+    async def _pump_stdin(self, worker: _RunningWorker) -> None:
         """Forwards pending user events to the running agent's stdin."""
-        stdin = proc.stdin
+        process = worker.process
+        stdin = process.stdin
         assert stdin is not None
         try:
             while True:
@@ -187,7 +304,7 @@ class AgentManager:
                     write_succeeded = await asyncio.to_thread(self._write_stdin, stdin, payload)
                     if not write_succeeded:
                         # Preserve events across unexpected worker exits so the next worker can process them.
-                        if not self._cancel_requested and not self._shutdown_requested:
+                        if not worker.cancel_requested and not self._shutdown_event.is_set():
                             self._client_events.extendleft(reversed(events))
                             self._has_client_events.set()
                         return
@@ -203,28 +320,33 @@ class AgentManager:
             return False
         return True
 
-    def _read_stdout(self, proc: subprocess.Popen[bytes], loop: asyncio.AbstractEventLoop, eof: asyncio.Event) -> None:
+    def _read_stdout(
+        self,
+        process: ManagedWorkerProcess,
+        loop: asyncio.AbstractEventLoop,
+        worker_ready: asyncio.Event,
+    ) -> None:
         """Reads agent stdout on a thread and hands each streaming event to the event loop until the pipe closes."""
-        stdout = proc.stdout
+        stdout = process.stdout
         assert stdout is not None
-        try:
-            for line in iter(stdout.readline, b""):
-                try:
-                    event = _STREAMING_EVENT_ADAPTER.validate_json(line)
-                except Exception:
-                    logger.error("Failed to validate agent stdout line: {}", line[:200])
-                    continue
-                loop.call_soon_threadsafe(self._streaming_events.put_nowait, event)
-        finally:
-            logger.info("Agent stdout EOF")
-            loop.call_soon_threadsafe(eof.set)
+        for line in iter(stdout.readline, b""):
+            try:
+                event = _STREAMING_EVENT_ADAPTER.validate_json(line)
+            except Exception:
+                logger.error("Failed to validate agent stdout line: {}", line[:200])
+                continue
+            loop.call_soon_threadsafe(self._streaming_events.put_nowait, event)
+            if isinstance(event, StatusEvent) and event.status_id == "agent_ready":
+                loop.call_soon_threadsafe(worker_ready.set)
+        logger.info("Agent stdout EOF")
 
-    def _read_stderr(self, proc: subprocess.Popen[bytes]) -> None:
+    @staticmethod
+    def _read_stderr(process: ManagedWorkerProcess, stderr_lines: list[str]) -> None:
         """Reads stderr from the agent subprocess on a thread, logging each line and collecting it for error reporting."""
-        stderr = proc.stderr
+        stderr = process.stderr
         assert stderr is not None
         for line in iter(stderr.readline, b""):
             text = line.decode().rstrip()
             if text:
-                self._stderr_lines.append(text)
+                stderr_lines.append(text)
                 logger.warning("agent stderr: {}", text)

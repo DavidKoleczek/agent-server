@@ -42,9 +42,7 @@ def _response_item_to_activity(message: ChatMessage) -> SessionActivity | None:
     if item_type == "reasoning":
         return _reasoning_item_to_activity(message, item)
     if item_type == "function_call":
-        return _function_call_item_to_activity(message, item)
-    if item_type == "function_call_output":
-        return None
+        return function_call_item_to_activity(message)
 
     return None
 
@@ -96,7 +94,12 @@ def _reasoning_item_to_activity(message: ChatMessage, item: Mapping[str, Any]) -
     )
 
 
-def _function_call_item_to_activity(message: ChatMessage, item: Mapping[str, Any]) -> TaskActivity:
+def function_call_item_to_activity(message: ChatMessage) -> TaskActivity:
+    """Convert a function call message into a task activity."""
+    item = message.message
+    if not isinstance(item, Mapping) or item.get("type") != "function_call":
+        raise TypeError("Chat message must contain a function call.")
+
     name = item.get("name")
     if not isinstance(name, str):
         raise TypeError("Function call response item must include a string name.")
@@ -112,6 +115,8 @@ def _function_call_item_to_activity(message: ChatMessage, item: Mapping[str, Any
     if not isinstance(arguments, dict):
         raise TypeError(f"Function call arguments for {name} must be a JSON object.")
 
+    sub_agent_id = arguments.get("sub_agent_id")
+
     raw_call_id = item.get("call_id")
     if not isinstance(raw_call_id, str) or not raw_call_id:
         raise TypeError("Function call response item must include a string call_id.")
@@ -123,6 +128,7 @@ def _function_call_item_to_activity(message: ChatMessage, item: Mapping[str, Any
         name=name,
         permission="pending",
         arguments=arguments,
+        sub_agent_id=sub_agent_id,
     )
 
 

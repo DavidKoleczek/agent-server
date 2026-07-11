@@ -17,6 +17,7 @@ class UserMessageEvent(BaseModel):
 
 class PermissionChangeEvent(BaseModel):
     type: Literal["permission_change"] = "permission_change"
+    agent_id: str = "main"
     id: str
     permission: TaskPermission
 
@@ -71,6 +72,7 @@ class TaskActivity(ActivityBase):
     permission: TaskPermission = "pending"
     arguments: dict[str, Any] | None = None
     result: str | None = None
+    sub_agent_id: str | None = None  # If this Task is a sub-agent, then this will be the ID of the sub-agent
 
 
 class ErrorActivity(ActivityBase):
@@ -100,12 +102,16 @@ class ActivityDelta(BaseModel):
     permission: TaskPermission | None = None
 
 
-class ActivityCreatedEvent(BaseModel):
+class StreamingEventBase(BaseModel):
+    agent_id: str = Field(default="main")
+
+
+class ActivityCreatedEvent(StreamingEventBase):
     type: Literal["activity_created"] = "activity_created"
     activity: SessionActivity
 
 
-class ActivityDeltaEvent(BaseModel):
+class ActivityDeltaEvent(StreamingEventBase):
     """Used to patch an existing activity. Intended for streaming efficiency."""
 
     type: Literal["activity_delta"] = "activity_delta"
@@ -113,14 +119,14 @@ class ActivityDeltaEvent(BaseModel):
     delta: ActivityDelta
 
 
-class ActivityUpdatedEvent(BaseModel):
+class ActivityUpdatedEvent(StreamingEventBase):
     """The full updated activity."""
 
     type: Literal["activity_updated"] = "activity_updated"
     activity: SessionActivity
 
 
-class StatusEvent(BaseModel):
+class StatusEvent(StreamingEventBase):
     type: Literal["status"] = "status"
     status_id: Literal[
         "agent_starting",
@@ -138,7 +144,7 @@ class StatusEvent(BaseModel):
     ]
 
 
-class SessionConfigChangedEvent(BaseModel):
+class SessionConfigChangedEvent(StreamingEventBase):
     type: Literal["session_config_changed"] = "session_config_changed"
     config_key: str
     new_value: str

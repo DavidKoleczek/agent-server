@@ -33,7 +33,14 @@ from pathlib import Path
 from agent_server.agent.agent import Agent, AgentConfig
 from agent_server.schemas.activity import ClientEvent, StreamingEvent, UserMessageEvent
 
-async def main():
+
+async def print_activities(queue: asyncio.Queue[StreamingEvent]) -> None:
+    while True:
+        event = await queue.get()
+        print(event.model_dump(mode="json"))
+
+
+async def main() -> None:
     client_events: asyncio.Queue[ClientEvent] = asyncio.Queue()
     streaming_events: asyncio.Queue[StreamingEvent] = asyncio.Queue()
 
@@ -54,10 +61,9 @@ async def main():
         await asyncio.gather(agent_task, printer_task, return_exceptions=True)
         agent.close()
 
-async def print_activities(queue: asyncio.Queue[StreamingEvent]):
-    while True:
-        event = await queue.get()
-        print(event.model_dump(mode="json"))
+
+if __name__ == "__main__":
+    asyncio.run(main())
 ```
 
 See [scripts/run_agent.py](../scripts/run_agent.py) for a complete working example that feeds timed activities and logs all events to a file.
@@ -68,3 +74,5 @@ See [scripts/run_agent.py](../scripts/run_agent.py) for a complete working examp
 Agents constructed with `agent_id="main"` include the `agent` tool. That tool starts a sub-agent in the same working directory and session database, gives it the requested prompt, forwards its streaming events to the caller, and returns the sub-agent's last assistant message as the tool result.
 
 Sub-agents use generated IDs like `sub-1234abcd`. Their persisted activities and chat messages use that ID, while the main agent keeps using `main`. Sub-agents do not receive the `agent` tool.
+
+Each sub-agent runs through its own `AgentManager`. When the agent is hosted by the server, sub-agent workers remain inside the main worker's managed process tree so cancellation and shutdown cannot orphan them.

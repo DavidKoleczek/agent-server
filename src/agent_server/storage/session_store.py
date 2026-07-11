@@ -93,6 +93,19 @@ class SessionStore:
                 )
             )
 
+    def update_chat_message_permission(
+        self,
+        message_id: str,
+        permission: TaskPermission,
+    ) -> None:
+        statement = update(chat_messages).where(chat_messages.c.id == message_id).values(permission=permission)
+
+        with self.engine.begin() as connection:
+            result = connection.execute(statement)
+
+        if result.rowcount != 1:
+            raise ValueError(f"Chat message does not exist: {message_id}")
+
     def save_activity(self, position: int, activity: SessionActivity, agent_id: str = "main") -> None:
         activity_json = activity.model_dump(mode="json")
         values: dict[str, Any] = {

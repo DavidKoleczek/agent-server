@@ -20,16 +20,17 @@ ws://host:port/agent
 ## Lifecycle
 
 1. The server accepts the WebSocket connection immediately.
-2. The server starts an agent subprocess immediately and emits `agent_starting`, then `agent_ready` once the subprocess is ready.
-3. The agent subprocess stays alive for the WebSocket connection and processes `user_message` events as they arrive.
-4. During a turn, the agent streams `activity_created`, `activity_delta`, and `activity_updated` events that build up and finalize the session activities, interleaved with `status` events.
-5. When a tool call requires approval, the agent emits a `task` activity with `permission` set to `pending` and pauses the turn until the client sends a `permission_change` event accepting or denying it, after which the turn resumes.
-6. When the main agent runs the `agent` tool, it starts a sub-agent. The sub-agent's streaming events are forwarded over the same WebSocket, and its session activities carry the sub-agent's `agent_id`.
-7. Sending `session_config_change` updates a session setting; the server persists it, applies it to the running agent, and replies with a `session_config_changed` event.
-8. Sending `cancel` kills the current agent subprocess, emits cancellation status events, and starts a fresh subprocess.
-9. Sending `quit` stops the agent subprocess and manager, then closes the WebSocket connection from the server side.
-10. If the agent subprocess exits unexpectedly, the server emits an error activity and starts a fresh subprocess.
-11. Invalid client messages produce an `activity_created` event wrapping an `error` activity. The connection remains open.
+1. The server emits `agent_starting`, places the new worker in a managed process tree, and emits `agent_ready` after initialization succeeds. Queued client events are not forwarded before `agent_ready`.
+1. The main agent subprocess stays alive for the WebSocket connection and processes `user_message` events as they arrive.
+1. During a turn, the agent streams `activity_created`, `activity_delta`, and `activity_updated` events that build up and finalize the session activities, interleaved with `status` events.
+1. When a tool call requires approval, the agent emits a `task` activity with `permission` set to `pending` and pauses the turn until the client sends a `permission_change` event accepting or denying it, after which the turn resumes.
+1. When the main agent runs the `agent` tool, it starts a sub-agent. The sub-agent's streaming events are forwarded over the same WebSocket, and its session activities carry the sub-agent's `agent_id`.
+1. Sending `session_config_change` updates a session setting; the server persists it, applies it to the main agent
+   and active sub-agents, and replies with a `session_config_changed` event.
+1. Sending `cancel` terminates the main worker and all descendants, emits cancellation status events, and starts a fresh worker.
+1. Sending `quit` terminates the complete worker process tree and manager, then closes the WebSocket connection from the server side.
+1. If the main worker exits unexpectedly, the server terminates its remaining descendants, emits an error activity, and starts a fresh worker after bounded exponential backoff.
+1. Invalid client messages produce an `activity_created` event wrapping an `error` activity. The connection remains open.
 
 
 ## Client Activities
@@ -49,22 +50,25 @@ Send a message to the agent.
 
 ### `permission_change`
 
-Approve or deny a pending tool call. The server re-evaluates the tool call identified by `id` using the new permission and resumes the turn.
+Approve or deny a pending tool call. The server routes the event to `agent_id`, re-evaluates the tool call identified
+by `id`, and resumes that agent.
 
 ```json
 {
   "type": "permission_change",
+  "agent_id": "main",
   "id": "fc_123",
   "permission": "accepted"
 }
 ```
 
+- `agent_id`: The agent that owns the tool call. Defaults to `main`.
 - `id`: The `id` of the `task` activity (the tool call) to update.
 - `permission`: The decision for the call. One of `accepted`, `denied`, `pending`.
 
 ### `cancel`
 
-Cancel the current agent run. The server kills the current agent subprocess, discards queued client events for that run, and starts a fresh subprocess.
+Cancel the current agent run. The server terminates the main worker and all descendants, discards queued client events for that run, and starts a fresh worker.
 
 ```json
 {
@@ -74,7 +78,7 @@ Cancel the current agent run. The server kills the current agent subprocess, dis
 
 ### `quit`
 
-Request a clean shutdown. The server stops the agent subprocess and manager, then closes the WebSocket connection.
+Request a clean shutdown. The server terminates the complete worker process tree and manager, then closes the WebSocket connection.
 
 ```json
 {
@@ -102,7 +106,10 @@ Change a session config value. The server validates the value, persists it, appl
 
 Messages sent by the server to the client. All messages are JSON text frames.
 
-These are the streaming events that wrap the lifecycle signals and the evolving session activities. The session activity payloads carried inside `activity_created`, `activity_delta`, and `activity_updated` are documented under [Session Activities](#session-activities).
+These are the streaming events that wrap the lifecycle signals and the evolving session activities. Every streaming
+event includes `agent_id`, which identifies the agent that produced it. The session activity payloads carried inside
+`activity_created`, `activity_delta`, and `activity_updated` are documented under
+[Session Activities](#session-activities).
 
 ### `status`
 
@@ -111,6 +118,7 @@ Reports the agent's current lifecycle phase. The `status_id` field identifies th
 ```json
 {
   "type": "status",
+  "agent_id": "main",
   "status_id": "agent_running"
 }
 ```
@@ -119,11 +127,11 @@ Reports the agent's current lifecycle phase. The `status_id` field identifies th
 
 - `agent_starting`: The server is spawning the agent subprocess.
 - `agent_ready`: The agent subprocess has started and is ready to receive client events.
-- `agent_cancelling`: The server is cancelling the current agent subprocess.
-- `agent_cancelled`: The current agent subprocess exited due to cancellation.
-- `agent_stopping`: The server is stopping the agent subprocess for connection shutdown.
-- `agent_stopped`: The agent subprocess exited due to connection shutdown.
-- `agent_running`: The agent loop is running and waiting for or processing client events.
+- `agent_cancelling`: The server is terminating the current worker process tree.
+- `agent_cancelled`: The current worker process tree exited due to cancellation.
+- `agent_stopping`: The server is terminating the worker process tree for connection shutdown.
+- `agent_stopped`: The worker process tree exited due to connection shutdown.
+- `agent_running`: The agent reconciliation loop is processing available work.
 - `agent_turn_ended`: The current agent turn has ended.
 - `waiting_for_llm_response`: The agent has sent a request and is waiting for the model to respond.
 - `processing_llm_response`: The agent is processing the model's response.
@@ -137,6 +145,7 @@ Emitted when a new activity begins. The `activity` field carries the full sessio
 ```json
 {
   "type": "activity_created",
+  "agent_id": "main",
   "activity": { ... }
 }
 ```
@@ -148,6 +157,7 @@ Patches an existing activity. Intended for streaming efficiency, so only the fie
 ```json
 {
   "type": "activity_delta",
+  "agent_id": "main",
   "activity_id": "fc_123",
   "delta": {
     "content_delta": "appended text",
@@ -172,6 +182,7 @@ Carries the complete, finalized activity, replacing any previously created or pa
 ```json
 {
   "type": "activity_updated",
+  "agent_id": "main",
   "activity": { ... }
 }
 ```
@@ -183,6 +194,7 @@ Confirms that a session config value changed, in response to a `session_config_c
 ```json
 {
   "type": "session_config_changed",
+  "agent_id": "main",
   "config_key": "model",
   "new_value": "claude-opus-4-7"
 }
@@ -263,7 +275,8 @@ A tool call made by the agent.
   "name": "read",
   "permission": "accepted",
   "arguments": { "file_path": "C:\\path\\to\\project\\src\\main.py" },
-  "result": "file contents"
+  "result": "file contents",
+  "sub_agent_id": null
 }
 ```
 
@@ -271,8 +284,9 @@ A tool call made by the agent.
 - `permission`: The permission decision for the call. One of `accepted`, `denied`, `pending`. Defaults to `pending`.
 - `arguments`: The tool call arguments as a JSON object, or `null` until they are known.
 - `result`: The tool output, or `null` until the call completes.
+- `sub_agent_id`: The generated agent ID when the task launches a sub-agent, otherwise `null`.
 
-For sub-agent calls, `name` is `agent`, `arguments` contains `description`, `prompt`, and `subagent_type`, and `result` is the sub-agent's final assistant message.
+For sub-agent calls, `name` is `agent`; `arguments` contains `description`, `prompt`, `subagent_type`, and the injected `sub_agent_id`; and `result` is the sub-agent's final assistant message.
 
 ### `error`
 

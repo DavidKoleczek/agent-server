@@ -21,4 +21,5 @@
     "evenBetterToml.formatter.reorderArrays": true,
     "python.testing.unittestEnabled": false,
     "python.testing.pytestEnabled": true,
+    "markdown.extension.orderedList.marker": "one"
 }
