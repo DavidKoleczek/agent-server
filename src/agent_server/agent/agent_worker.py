@@ -104,9 +104,17 @@ async def _stdout_writer(queue: asyncio.Queue[StreamingEvent], agent_id: str) ->
 
 
 def _attribute_streaming_event(event: StreamingEvent, agent_id: str) -> StreamingEvent:
-    event.agent_id = agent_id
+    # Forwarded sub-agent events are already attributed; only default IDs belong to the current worker.
+    attributed_agent_id = event.agent_id
+    if attributed_agent_id == "main":
+        if isinstance(event, ActivityCreatedEvent | ActivityUpdatedEvent) and event.activity.agent_id != "main":
+            attributed_agent_id = event.activity.agent_id
+        else:
+            attributed_agent_id = agent_id
+
+    event.agent_id = attributed_agent_id
     if isinstance(event, ActivityCreatedEvent | ActivityUpdatedEvent):
-        event.activity.agent_id = agent_id
+        event.activity.agent_id = attributed_agent_id
     return event
 
 
