@@ -114,7 +114,12 @@ class ActivityStreamConverter:
             self._items[event.output_index] = _StreamItem(activity_id=activity_id, created=True)
             return [
                 ActivityCreatedEvent(
-                    activity=TaskActivity(id=activity_id, state="in_progress", name=item.name, permission="pending")
+                    activity=TaskActivity(
+                        id=activity_id,
+                        state="in_progress",
+                        name=item.name,
+                        permission="not_determined",
+                    )
                 )
             ]
         if isinstance(item, ResponseReasoningItem):
@@ -183,7 +188,11 @@ class ActivityStreamConverter:
         if arguments is None and record.emitted_arguments:
             arguments = record.emitted_arguments
         return TaskActivity(
-            id=record.activity_id, state="complete", name=item.name, permission="accepted", arguments=arguments
+            id=record.activity_id,
+            state="in_progress",
+            name=item.name,
+            permission="not_determined",
+            arguments=arguments,
         )
 
     def _finalize_reasoning(self, record: _StreamItem, item: ResponseReasoningItem) -> list[StreamingEvent]:

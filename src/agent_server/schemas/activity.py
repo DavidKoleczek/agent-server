@@ -4,7 +4,9 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 ActivityState = Literal["in_progress", "complete", "error", "cancelled"]
-TaskPermission = Literal["accepted", "denied", "pending"]
+# Pending means waiting for the user to make a decision, while not determined means the policy
+# (determining if we need to auto accept, auto deny, or ask the user) has not finished yet.
+TaskPermission = Literal["accepted", "denied", "pending", "not_determined"]
 
 # region Client Events
 # Client events are inbound commands from the client. They are not persisted as conversation history.
@@ -69,7 +71,7 @@ class ReasoningActivity(ActivityBase):
 class TaskActivity(ActivityBase):
     type: Literal["task"] = "task"
     name: str
-    permission: TaskPermission = "pending"
+    permission: TaskPermission = "not_determined"
     arguments: dict[str, Any] | None = None
     result: str | None = None
     sub_agent_id: str | None = None  # If this Task is a sub-agent, then this will be the ID of the sub-agent

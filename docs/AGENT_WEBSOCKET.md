@@ -23,7 +23,8 @@ ws://host:port/agent
 1. The server emits `agent_starting`, places the new worker in a managed process tree, and emits `agent_ready` after initialization succeeds. Queued client events are not forwarded before `agent_ready`.
 1. The main agent subprocess stays alive for the WebSocket connection and processes `user_message` events as they arrive.
 1. During a turn, the agent streams `activity_created`, `activity_delta`, and `activity_updated` events that build up and finalize the session activities, interleaved with `status` events.
-1. When a tool call requires approval, the agent emits a `task` activity with `permission` set to `pending` and pauses the turn until the client sends a `permission_change` event accepting or denying it, after which the turn resumes.
+1. A new tool call starts with `permission` set to `not_determined` while the server evaluates its permission policy. 
+If approval is required, the server changes `permission` to `pending` and pauses the turn until the client accepts or denies the call.
 1. When the main agent runs the `agent` tool, it starts a sub-agent. The sub-agent's streaming events are forwarded over the same WebSocket, and its session activities carry the sub-agent's `agent_id`.
 1. Sending `session_config_change` updates a session setting; the server persists it, applies it to the main agent
    and active sub-agents, and replies with a `session_config_changed` event.
@@ -50,8 +51,7 @@ Send a message to the agent.
 
 ### `permission_change`
 
-Approve or deny a pending tool call. The server routes the event to `agent_id`, re-evaluates the tool call identified
-by `id`, and resumes that agent.
+Update a tool call's permission state. The server routes the event to `agent_id`, applies the state to the call identified by `id`, and resumes that agent.
 
 ```json
 {
@@ -64,7 +64,7 @@ by `id`, and resumes that agent.
 
 - `agent_id`: The agent that owns the tool call. Defaults to `main`.
 - `id`: The `id` of the `task` activity (the tool call) to update.
-- `permission`: The decision for the call. One of `accepted`, `denied`, `pending`.
+- `permission`: The permission state for the call. One of `accepted`, `denied`, `pending`, or `not_determined`.
 
 ### `cancel`
 
@@ -173,11 +173,11 @@ The `delta` fields are all optional:
 - `content_delta`: Text to append to the activity's `content`.
 - `argument_delta`: A single task argument key and its current value. The value replaces any prior value for that key.
 - `result_delta`: Text to append to a task activity's `result`.
-- `permission`: An updated permission decision for a task activity. One of `accepted`, `denied`, `pending`.
+- `permission`: An updated permission state for a task activity. One of `accepted`, `denied`, `pending`, or `not_determined`.
 
 ### `activity_updated`
 
-Carries the complete, finalized activity, replacing any previously created or patched copy. Emitted when an activity reaches a terminal state.
+Carries the full current activity, replacing any previously created or patched copy. A task activity can remain `in_progress` while its permission policy is evaluated or the tool executes.
 
 ```json
 {
@@ -281,7 +281,8 @@ A tool call made by the agent.
 ```
 
 - `name`: The name of the tool being called.
-- `permission`: The permission decision for the call. One of `accepted`, `denied`, `pending`. Defaults to `pending`.
+- `permission`: The permission state for the call. One of `accepted`, `denied`, `pending`, or `not_determined`.
+`not_determined` means the server has not evaluated the permission policy. `pending` means the call requires a client decision. Defaults to `not_determined`.
 - `arguments`: The tool call arguments as a JSON object, or `null` until they are known.
 - `result`: The tool output, or `null` until the call completes.
 - `sub_agent_id`: The generated agent ID when the task launches a sub-agent, otherwise `null`.

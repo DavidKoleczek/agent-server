@@ -126,7 +126,7 @@ def function_call_item_to_activity(message: ChatMessage) -> TaskActivity:
         state="in_progress",
         timestamp=message.timestamp,
         name=name,
-        permission="pending",
+        permission="not_determined",
         arguments=arguments,
         sub_agent_id=sub_agent_id,
     )

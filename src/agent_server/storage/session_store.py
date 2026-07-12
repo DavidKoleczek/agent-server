@@ -180,7 +180,7 @@ class SessionStore:
             match permission_value:
                 case None:
                     permission = None
-                case "accepted" | "denied" | "pending":
+                case "accepted" | "denied" | "pending" | "not_determined":
                     permission = permission_value
                 case _:
                     raise ValueError(f"Unknown chat message permission: {permission_value}")

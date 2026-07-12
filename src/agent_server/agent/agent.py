@@ -196,7 +196,7 @@ class Agent:
         task_activity = next((a for a in self.activities if isinstance(a, TaskActivity) and a.id == call_id), None)
         if task_activity is None:
             task_activity = function_call_item_to_activity(tool_call.chat_message)
-            task_activity.permission = tool_call.permission or "pending"
+            task_activity.permission = tool_call.permission or "not_determined"
             self._append_activity(task_activity)
             self.streaming_events.put_nowait(ActivityCreatedEvent(activity=task_activity))
 
