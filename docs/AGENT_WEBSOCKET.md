@@ -133,6 +133,7 @@ Reports the agent's current lifecycle phase. The `status_id` field identifies th
 - `agent_stopped`: The worker process tree exited due to connection shutdown.
 - `agent_running`: The agent reconciliation loop is processing available work.
 - `agent_turn_ended`: The current agent turn has ended.
+- `processing_message`: The server received a `user_message`, `permission_change`, or `session_config_change` event and is submitting it for processing.
 - `waiting_for_llm_response`: The agent has sent a request and is waiting for the model to respond.
 - `processing_llm_response`: The agent is processing the model's response.
 - `executing_tool`: The agent is executing a tool call.
