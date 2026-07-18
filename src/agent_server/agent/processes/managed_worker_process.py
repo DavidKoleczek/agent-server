@@ -65,7 +65,7 @@ class ManagedWorkerProcess:
                 process_tree.close()
                 raise
             try:
-                process_tree.assign(process)
+                process_tree.assign(process.pid)
             except Exception:
                 try:
                     _stop_process_after_failed_start(process)

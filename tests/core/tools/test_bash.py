@@ -1,9 +1,15 @@
 import asyncio
 import json
 from pathlib import Path
+import sys
+
+import pytest
 
 from agent_server.core.tools._utils import ConstraintPolicy
 from agent_server.core.tools.bash import BashConstraintRule, BashTool, BashToolConfig
+from agent_server.core.tools.presets import _BASH_PERMISSIVE_RULES
+
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="Bash tests require a POSIX environment.")
 
 
 def _make_tool(rules: list[BashConstraintRule], default_policy: ConstraintPolicy = ConstraintPolicy.ASK) -> BashTool:
@@ -145,6 +151,12 @@ def test_allow_all_with_dangerous_command_denylist() -> None:
     # Chained commands: most restrictive wins
     assert tool.check_constraint(command="ls && rm -rf /") == ConstraintPolicy.DENY
     assert tool.check_constraint(command="echo hello; sudo reboot") == ConstraintPolicy.DENY
+
+
+def test_permissive_preset_denies_recursive_force_removal() -> None:
+    shell_tool = _make_tool(list(_BASH_PERMISSIVE_RULES))
+    assert shell_tool.check_constraint(command="rm -rf /") == ConstraintPolicy.DENY
+    assert shell_tool.check_constraint(command="git status") == ConstraintPolicy.ALLOW
 
 
 # Execute Tests

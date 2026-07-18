@@ -1,5 +1,4 @@
 from pathlib import Path
-from typing import ClassVar
 
 from openai.types.responses.function_tool_param import FunctionToolParam
 from pydantic import BaseModel
@@ -46,12 +45,11 @@ class GlobToolConfig(BaseModel):
 
 
 class GlobTool:
-    TOOLS: ClassVar[dict[str, FunctionToolParam]] = {
-        TOOL_NAME: GLOB_TOOL_DEFINITION,
-    }
-
     def __init__(self, config: GlobToolConfig) -> None:
         self.config = config
+
+    def get_tool_defs(self) -> dict[str, FunctionToolParam]:
+        return {TOOL_NAME: GLOB_TOOL_DEFINITION}
 
     def execute(self, **arguments: object) -> str:
         """Execute a glob search for files matching a pattern.

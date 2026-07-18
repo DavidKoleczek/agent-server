@@ -1,7 +1,6 @@
 import base64
 import os
 from pathlib import Path
-from typing import ClassVar
 
 os.environ["PYMUPDF_SUGGEST_LAYOUT_ANALYZER"] = "0"
 
@@ -78,10 +77,6 @@ IMAGE_MIME_TYPES = {
 
 
 class ReadTool:
-    TOOLS: ClassVar[dict[str, FunctionToolParam]] = {
-        TOOL_NAME: READ_TOOL_DEFINITION,
-    }
-
     def __init__(self, config: ReadToolConfig) -> None:
         """Initialize the ReadTool with constraint configuration.
 
@@ -117,6 +112,9 @@ class ReadTool:
             tool = ReadTool(config)
         """
         self.config = config
+
+    def get_tool_defs(self) -> dict[str, FunctionToolParam]:
+        return {TOOL_NAME: READ_TOOL_DEFINITION}
 
     def execute(self, **arguments: object) -> str | ResponseFunctionCallOutputItemListParam:
         """Read a file and return its contents.

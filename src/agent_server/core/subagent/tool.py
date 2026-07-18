@@ -2,7 +2,6 @@ import asyncio
 from collections.abc import Iterable, Mapping
 from contextlib import suppress
 from pathlib import Path
-from typing import ClassVar
 
 from liquid import render
 from openai.types.responses.function_tool_param import FunctionToolParam
@@ -61,10 +60,6 @@ ERROR_MESSAGE = "The agent has unknown error. Please continue without a sub-agen
 
 
 class AgentTool:
-    TOOLS: ClassVar[dict[str, FunctionToolParam]] = {
-        TOOL_NAME: AGENT_TOOL_DEFINITION,
-    }
-
     def __init__(
         self,
         streaming_events: asyncio.Queue[StreamingEvent],
@@ -75,6 +70,9 @@ class AgentTool:
         self.working_dir = working_dir
         self.session_database = session_database
         self._agent_managers: dict[str, AgentManager] = {}
+
+    def get_tool_defs(self) -> dict[str, FunctionToolParam]:
+        return {TOOL_NAME: AGENT_TOOL_DEFINITION}
 
     async def submit_event(self, agent_id: str, event: ClientEvent) -> bool:
         agent_manager = self._agent_managers.get(agent_id)

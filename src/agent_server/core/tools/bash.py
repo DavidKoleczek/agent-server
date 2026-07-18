@@ -7,7 +7,7 @@ from pathlib import Path
 import secrets
 import tempfile
 import time
-from typing import Any, ClassVar
+from typing import Any
 
 from openai.types.responses.function_tool_param import FunctionToolParam
 from pydantic import BaseModel
@@ -236,15 +236,16 @@ class BackgroundTask:
 
 
 class BashTool:
-    TOOLS: ClassVar[dict[str, FunctionToolParam]] = {
-        BASH_TOOL_NAME: BASH_TOOL_DEFINITION,
-        KILL_BASH_TOOL_NAME: KILL_BASH_TOOL_DEFINITION,
-    }
-
     def __init__(self, config: BashToolConfig) -> None:
         self.config = config
         self.current_working_dir = config.working_dir
         self._background_tasks: dict[str, BackgroundTask] = {}
+
+    def get_tool_defs(self) -> dict[str, FunctionToolParam]:
+        return {
+            BASH_TOOL_NAME: BASH_TOOL_DEFINITION,
+            KILL_BASH_TOOL_NAME: KILL_BASH_TOOL_DEFINITION,
+        }
 
     async def execute(self, **arguments: object) -> str:
         """Unified execute method for bash and kill operations.
@@ -274,7 +275,7 @@ class BashTool:
         elif command_arg is not None:
             return await self._execute_bash(str(command_arg), timeout, description, run_in_background)
         else:
-            return json.dumps({"errors": "Must provide either 'command' or 'shell_id'"})
+            return json.dumps({"errors": "Required arguments missing."})
 
     async def _execute_bash(
         self,

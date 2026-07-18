@@ -1,6 +1,5 @@
 from pathlib import Path
 import subprocess
-from typing import ClassVar
 
 from liquid import render
 from openai.types.responses.function_tool_param import FunctionToolParam
@@ -114,12 +113,11 @@ class GrepToolConfig(BaseModel):
 
 
 class GrepTool:
-    TOOLS: ClassVar[dict[str, FunctionToolParam]] = {
-        TOOL_NAME: GREP_TOOL_DEFINITION,
-    }
-
     def __init__(self, config: GrepToolConfig) -> None:
         self.config = config
+
+    def get_tool_defs(self) -> dict[str, FunctionToolParam]:
+        return {TOOL_NAME: GREP_TOOL_DEFINITION}
 
     def check_constraint(self, **arguments: object) -> ConstraintPolicy:
         """Determine what constraint applies to a given path.

@@ -5,7 +5,7 @@ https://github.com/sst/opencode/blob/dev/packages/opencode/src/tool/edit.ts
 
 from collections.abc import Generator
 from pathlib import Path
-from typing import ClassVar, NamedTuple
+from typing import NamedTuple
 
 from liquid import render
 from loguru import logger
@@ -95,12 +95,11 @@ class EditToolConfig(BaseModel):
 
 
 class EditTool:
-    TOOLS: ClassVar[dict[str, FunctionToolParam]] = {
-        TOOL_NAME: EDIT_TOOL_DEFINITION,
-    }
-
     def __init__(self, config: EditToolConfig) -> None:
         self.config = config
+
+    def get_tool_defs(self) -> dict[str, FunctionToolParam]:
+        return {TOOL_NAME: EDIT_TOOL_DEFINITION}
 
     def execute(self, **arguments: object) -> str:
         """Edit a file by replacing old_string with new_string.

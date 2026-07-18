@@ -1,5 +1,4 @@
 from pathlib import Path
-from typing import ClassVar
 
 from openai.types.responses.function_tool_param import FunctionToolParam
 from pydantic import BaseModel
@@ -48,12 +47,11 @@ class WriteToolConfig(BaseModel):
 
 
 class WriteTool:
-    TOOLS: ClassVar[dict[str, FunctionToolParam]] = {
-        TOOL_NAME: WRITE_TOOL_DEFINITION,
-    }
-
     def __init__(self, config: WriteToolConfig) -> None:
         self.config = config
+
+    def get_tool_defs(self) -> dict[str, FunctionToolParam]:
+        return {TOOL_NAME: WRITE_TOOL_DEFINITION}
 
     def execute(self, **arguments: object) -> str:
         """Write content to a file.

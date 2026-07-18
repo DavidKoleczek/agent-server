@@ -1,4 +1,4 @@
-from typing import ClassVar, Literal
+from typing import Literal
 
 from openai.types.responses.function_tool_param import FunctionToolParam
 from pydantic import BaseModel, ValidationError
@@ -229,12 +229,11 @@ TODO_WRITE_TOOL_DEFINITION: FunctionToolParam = {
 
 
 class TodoTool:
-    TOOLS: ClassVar[dict[str, FunctionToolParam]] = {
-        TOOL_NAME: TODO_WRITE_TOOL_DEFINITION,
-    }
-
     def __init__(self) -> None:
         self._todos: list[TodoItem] = []
+
+    def get_tool_defs(self) -> dict[str, FunctionToolParam]:
+        return {TOOL_NAME: TODO_WRITE_TOOL_DEFINITION}
 
     @property
     def todos(self) -> list[TodoItem]:

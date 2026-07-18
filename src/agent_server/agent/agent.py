@@ -403,6 +403,7 @@ class Agent:
         model_input.insert(0, ChatMessage(message=EasyInputMessageParam(role="system", content=system_prompt)))
 
         # Call the model and stream events to the caller.
+        self._refresh_tool_definitions()
         stream = await self.router.create(
             input=model_input,
             model=self.model,
@@ -527,8 +528,17 @@ class Agent:
             tools.append(self._agent_tool)
 
         self.tools = tools
-        self._request_tools: list[ToolParam] = [defn for tool in self.tools for defn in tool.TOOLS.values()]
-        self._tools_by_name: dict[str, Tool] = {name: tool for tool in self.tools for name in tool.TOOLS}
+        self._refresh_tool_definitions()
+
+    def _refresh_tool_definitions(self) -> None:
+        """Refresh the model request and tool lookup definitions from one snapshot."""
+        tool_definitions = [(tool, tool.get_tool_defs()) for tool in self.tools]
+        self._request_tools: list[ToolParam] = [
+            definition for _, definitions in tool_definitions for definition in definitions.values()
+        ]
+        self._tools_by_name: dict[str, Tool] = {
+            name: tool for tool, definitions in tool_definitions for name in definitions
+        }
 
     def _get_function_call_by_id(self, call_id: str) -> ChatMessage | None:
         tool_call_msg = next(

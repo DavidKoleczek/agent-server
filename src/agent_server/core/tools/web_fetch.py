@@ -1,5 +1,3 @@
-from typing import ClassVar
-
 from openai.types.responses import ResponseFunctionCallOutputItemListParam
 from openai.types.responses.function_tool_param import FunctionToolParam
 
@@ -37,12 +35,11 @@ WEB_FETCH_DEFINITION: FunctionToolParam = {
 
 
 class WebFetchTool:
-    TOOLS: ClassVar[dict[str, FunctionToolParam]] = {
-        TOOL_NAME: WEB_FETCH_DEFINITION,
-    }
-
     def __init__(self) -> None:
         pass
+
+    def get_tool_defs(self) -> dict[str, FunctionToolParam]:
+        return {TOOL_NAME: WEB_FETCH_DEFINITION}
 
     def check_constraint(self, **arguments: object) -> ConstraintPolicy:
         return ConstraintPolicy.ALLOW

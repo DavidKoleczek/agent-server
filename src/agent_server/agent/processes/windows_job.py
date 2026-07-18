@@ -1,7 +1,7 @@
-"""Windows Job Object containment for agent worker process trees.
+"""Windows Job Object containment for managed process trees.
 
-`Popen.kill()` calls `TerminateProcess`, which only terminates the direct worker. A Job Object groups that worker,
-its descendants, and nested sub-agent jobs so `TerminateJobObject` can terminate the complete tree.
+`Popen.kill()` calls `TerminateProcess`, which only terminates the direct process. A Job Object groups that process,
+its descendants, and nested jobs so `TerminateJobObject` can terminate the complete tree.
 
 Sources:
 https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects
@@ -10,7 +10,6 @@ https://learn.microsoft.com/en-us/windows/win32/api/jobapi2/nf-jobapi2-terminate
 
 import ctypes
 from ctypes import wintypes
-import subprocess
 from typing import Never
 
 # `ctypes` does not import the constants from WinNT.h. Information class 9 tells `SetInformationJobObject` to
@@ -19,7 +18,7 @@ from typing import Never
 _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS = 9
 
 # Explicit termination handles cancellation and shutdown. This limit is also required as a fail-safe: without it,
-# closing the last job handle does not terminate remaining workers if their manager exits before explicit cleanup.
+# closing the last job handle does not terminate remaining processes if their manager exits before explicit cleanup.
 # Source: https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_basic_limit_information
 _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 
@@ -30,8 +29,8 @@ _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 _PROCESS_SET_QUOTA = 0x0100
 _PROCESS_TERMINATE = 0x0001
 
-# `TerminateJobObject` applies a caller-selected exit code to every terminated process. A nonzero value distinguishes
-# forced termination at the OS level; `AgentManager` separately tracks whether cancellation or shutdown requested it.
+# `TerminateJobObject` applies a caller-selected exit code to every terminated process.
+# A nonzero value distinguishes forced termination at the OS level
 _FORCED_TERMINATION_EXIT_CODE = 1
 
 
@@ -120,7 +119,7 @@ _close_handle = ctypes.WINFUNCTYPE(
 
 
 class WindowsJob:
-    """Owns a Windows Job Object containing one worker process tree."""
+    """Owns a Windows Job Object containing one process tree."""
 
     def __init__(self) -> None:
         handle = _create_job_object(None, None)
@@ -141,13 +140,13 @@ class WindowsJob:
             self._handle = None
             _raise_windows_error("SetInformationJobObject", error)
 
-    def assign(self, process: subprocess.Popen[bytes]) -> None:
-        """Assigns a worker to this job before the worker is allowed to initialize."""
+    def assign(self, process_id: int) -> None:
+        """Assigns a process to this job before it is released to perform work."""
         handle = self._require_handle()
         process_handle = _open_process(
             _PROCESS_SET_QUOTA | _PROCESS_TERMINATE,
             False,
-            process.pid,
+            process_id,
         )
         if not process_handle:
             _raise_last_error("OpenProcess")
