@@ -5,7 +5,7 @@ from liquid import render
 from openai.types.responses.function_tool_param import FunctionToolParam
 from pydantic import BaseModel
 
-from agent_server.core.tools._ripgrep import find_ripgrep, run_ripgrep
+from agent_server.core.tools._ripgrep import RipgrepOutputDecodeError, find_ripgrep, run_ripgrep
 from agent_server.core.tools._utils import ConstraintPolicy, ConstraintRule, check_path_constraint
 
 TOOL_NAME = "grep"
@@ -207,6 +207,8 @@ class GrepTool:
             return RIPGREP_NOT_FOUND_ERROR
         except subprocess.TimeoutExpired:
             return render("Error: ripgrep search timed out after {{seconds}} seconds", seconds=RIPGREP_TIMEOUT_SECONDS)
+        except RipgrepOutputDecodeError as exc:
+            return f"Error: {exc}"
 
         if result.returncode >= 2:
             return f"Error: ripgrep failed: {result.stderr.strip()}"

@@ -6,6 +6,13 @@ import shutil
 import subprocess
 
 
+class RipgrepOutputDecodeError(ValueError):
+    """Raised when ripgrep emits output that is not valid UTF-8."""
+
+    def __init__(self, stream: str, error: UnicodeDecodeError) -> None:
+        super().__init__(f"ripgrep {stream} is not valid UTF-8: {error}")
+
+
 def get_platform_key() -> str:
     """Get platform identifier for binary selection.
 
@@ -70,10 +77,24 @@ def run_ripgrep(args: list[str], cwd: Path, timeout: int = 30) -> subprocess.Com
     if rg_path is None:
         raise FileNotFoundError("ripgrep binary not found")
 
-    return subprocess.run(
+    result = subprocess.run(
         [str(rg_path), *args],
         cwd=cwd,
         capture_output=True,
-        text=True,
         timeout=timeout,
+    )
+    try:
+        stdout = result.stdout.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise RipgrepOutputDecodeError("stdout", exc) from exc
+    try:
+        stderr = result.stderr.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise RipgrepOutputDecodeError("stderr", exc) from exc
+
+    return subprocess.CompletedProcess(
+        args=result.args,
+        returncode=result.returncode,
+        stdout=stdout,
+        stderr=stderr,
     )

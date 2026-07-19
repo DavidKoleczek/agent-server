@@ -1,6 +1,7 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from agent_server.core.tools._ripgrep import RipgrepOutputDecodeError
 from agent_server.core.tools._utils import ConstraintPolicy
 from agent_server.core.tools.grep import GrepConstraintRule, GrepTool, GrepToolConfig
 
@@ -74,6 +75,38 @@ def test_execute_content_with_line_numbers(tmp_path: Path) -> None:
 
     assert "2:" in result
     assert "match_here" in result
+
+
+def test_execute_unicode_content(tmp_path: Path) -> None:
+    config = GrepToolConfig(
+        working_dir=tmp_path,
+        rules=[GrepConstraintRule(pattern="**", policy=ConstraintPolicy.ALLOW)],
+    )
+    tool = GrepTool(config)
+
+    (tmp_path / "test.py").write_text("match \u23ed\ufe0f\n", encoding="utf-8")
+
+    result = tool.execute(pattern="match", output_mode="content", head_limit=1)
+
+    assert "\u23ed\ufe0f" in result
+
+
+@patch("agent_server.core.tools.grep.run_ripgrep")
+def test_execute_invalid_utf8_output(mock_run: MagicMock, tmp_path: Path) -> None:
+    config = GrepToolConfig(
+        working_dir=tmp_path,
+        rules=[GrepConstraintRule(pattern="**", policy=ConstraintPolicy.ALLOW)],
+    )
+    tool = GrepTool(config)
+    decode_error = UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+    mock_run.side_effect = RipgrepOutputDecodeError("stdout", decode_error)
+
+    result = tool.execute(pattern="match")
+
+    assert result == (
+        "Error: ripgrep stdout is not valid UTF-8: "
+        "'utf-8' codec can't decode byte 0xff in position 0: invalid start byte"
+    )
 
 
 def test_execute_head_limit(tmp_path: Path) -> None:
