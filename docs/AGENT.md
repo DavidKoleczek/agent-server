@@ -14,11 +14,13 @@ from agent_server.agent.agent import AgentConfig
 config = AgentConfig(
     working_dir=Path("/path/to/project"),
     session_database=Path("conversation.sqlite"),
+    default_model="gpt-5.5",
 )
 ```
 
-- `working_dir`: Directory the agent operates in.
-- `session_database`: Path to the SQLite session database. If omitted, a new database is created under `<working_dir>/.agents/sessions/`.
+- `working_dir` (required): Directory the agent operates in.
+- `session_database` (optional): Path to the SQLite session database. If omitted, a new database is created under `<working_dir>/.agents/sessions/`.
+- `default_model` (optional): Initial model for sessions without stored configuration. Invalid model names use the server default, and existing session configuration takes precedence.
 
 
 ## Standalone Usage

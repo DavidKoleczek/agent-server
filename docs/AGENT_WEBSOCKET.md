@@ -13,8 +13,9 @@ ws://host:port/agent
 
 ### Query Parameters
 
-- `working_dir`: Absolute path to the directory the agent operates in. Defaults to the server's working directory.
-- `session_database`: Absolute path to a SQLite database file for persisting session history. The client owns this path; if it is omitted the server rejects the connection by closing with code 1008.
+- `session_database` (required): Absolute path to a SQLite database file for persisting session history. The client owns this path; if it is omitted the server rejects the connection by closing with code 1008.
+- `working_dir` (optional): Absolute path to the directory the agent operates in. Defaults to the server's working directory.
+- `default_model` (optional): Initial model for sessions without stored configuration. Invalid model names use the server default, and existing session configuration takes precedence.
 
 
 ## Lifecycle

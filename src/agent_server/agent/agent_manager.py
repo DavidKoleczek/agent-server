@@ -2,7 +2,6 @@ import asyncio
 from collections import deque
 from contextlib import suppress
 from dataclasses import dataclass, field
-from pathlib import Path
 import sys
 import threading
 from typing import IO
@@ -13,6 +12,7 @@ from pydantic import TypeAdapter
 
 from agent_server.agent.processes.managed_worker_process import ManagedWorkerProcess
 from agent_server.schemas.activity import ActivityCreatedEvent, ClientEvent, ErrorActivity, StatusEvent, StreamingEvent
+from agent_server.schemas.agent_config import AgentConfig
 
 _STREAMING_EVENT_ADAPTER = TypeAdapter(StreamingEvent)
 _RESTART_BACKOFF_INITIAL_SECONDS = 1.0
@@ -87,15 +87,13 @@ class AgentManager:
     def __init__(
         self,
         streaming_events: asyncio.Queue[StreamingEvent],
-        working_dir: Path,
-        session_database: Path | None = None,
+        config: AgentConfig,
         agent_id: str = "main",
         process_tree_root: bool = True,
     ) -> None:
 
         self._streaming_events = streaming_events
-        self._working_dir = working_dir
-        self._session_database = session_database
+        self._config = config
         self.agent_id = agent_id
         # On POSIX, root managers create the process group while sub-agent managers join it for recursive cancellation.
         self._process_tree_root = process_tree_root
@@ -191,9 +189,11 @@ class AgentManager:
         )
 
     async def _start_worker(self, worker_ready: asyncio.Event) -> _RunningWorker:
+        serialized_config = self._config.model_dump_json().encode() + b"\n"
         process = ManagedWorkerProcess.start(
             self._worker_command(),
             process_tree_root=self._process_tree_root,
+            startup_payload=serialized_config,
         )
         stderr_lines: list[str] = []
         loop = asyncio.get_running_loop()
@@ -229,14 +229,9 @@ class AgentManager:
             sys.executable,
             "-m",
             "agent_server.agent.agent_worker",
-            "--working-dir",
-            str(self._working_dir),
             "--agent-id",
             self.agent_id,
-            "--managed",
         ]
-        if self._session_database is not None:
-            command.extend(["--session-database", str(self._session_database)])
         return command
 
     async def _report_worker_exit(self, result: _WorkerRunResult) -> None:

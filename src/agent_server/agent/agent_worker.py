@@ -6,7 +6,6 @@ import argparse
 import asyncio
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 from typing import Any
@@ -14,7 +13,7 @@ from typing import Any
 from loguru import logger
 from pydantic import TypeAdapter
 
-from agent_server.agent.agent import Agent, AgentConfig
+from agent_server.agent.agent import Agent
 from agent_server.agent.processes.managed_worker_process import wait_for_start_signal
 from agent_server.schemas.activity import (
     ActivityCreatedEvent,
@@ -23,6 +22,7 @@ from agent_server.schemas.activity import (
     StatusEvent,
     StreamingEvent,
 )
+from agent_server.schemas.agent_config import AgentConfig
 
 _USER_ACTIVITY_ADAPTER = TypeAdapter(ClientEvent)
 
@@ -31,20 +31,20 @@ async def main() -> None:
     _patch_subprocess_default_stdin()
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--working-dir", type=Path, required=True)
-    parser.add_argument("--session-database", type=Path, default=None)
     parser.add_argument("--agent-id", type=str, default="main")
-    parser.add_argument("--managed", action="store_true")
     args = parser.parse_args()
 
-    if args.managed and not wait_for_start_signal():
+    if not wait_for_start_signal():
         return
+    config_payload = sys.stdin.buffer.readline()
+    if not config_payload:
+        raise RuntimeError("Agent config payload is unavailable.")
+    config = AgentConfig.model_validate_json(config_payload)
 
     client_queue: asyncio.Queue[ClientEvent] = asyncio.Queue()
     streaming_queue: asyncio.Queue[StreamingEvent] = asyncio.Queue()
 
-    logger.info("Agent worker starting (working_dir={})", args.working_dir)
-    config = AgentConfig(working_dir=args.working_dir, session_database=args.session_database)
+    logger.info("Agent worker starting (working_dir={})", config.working_dir)
     agent = Agent(config=config, client_events=client_queue, streaming_events=streaming_queue, agent_id=args.agent_id)
 
     logger.info("Agent initialized")

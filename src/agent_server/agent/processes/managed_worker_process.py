@@ -55,6 +55,7 @@ class ManagedWorkerProcess:
         command: Sequence[str],
         *,
         process_tree_root: bool,
+        startup_payload: bytes = b"",
     ) -> Self:
         """Starts a worker and releases it only after process-tree containment succeeds."""
         if sys.platform == "win32":
@@ -78,7 +79,7 @@ class ManagedWorkerProcess:
 
         managed_process = cls(process, process_tree)
         try:
-            managed_process._release_startup_gate()
+            managed_process._release_startup_gate(startup_payload)
         except Exception:
             managed_process._clean_up_failed_start()
             raise
@@ -127,11 +128,13 @@ class ManagedWorkerProcess:
                 if pipe is not None:
                     pipe.close()
 
-    def _release_startup_gate(self) -> None:
+    def _release_startup_gate(self, startup_payload: bytes) -> None:
         stdin = self.stdin
         if stdin is None:
             raise RuntimeError("Managed process stdin is unavailable.")
         stdin.write(_START_SIGNAL)
+        if startup_payload:
+            stdin.write(startup_payload)
         stdin.flush()
 
     def _clean_up_failed_start(self) -> None:

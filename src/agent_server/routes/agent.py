@@ -18,6 +18,7 @@ from agent_server.schemas.activity import (
     StreamingEvent,
     UserMessageEvent,
 )
+from agent_server.schemas.agent_config import AgentConfig
 
 router = APIRouter()
 
@@ -33,8 +34,9 @@ async def agent_endpoint(websocket: WebSocket) -> None:
     Websocket that handles realtime interaction with the agent.
     It uses the AgentManager to create agent processes and send information back and forth between it and the client.
     """
-    working_dir_param = websocket.query_params.get("working_dir")
-    session_database_param = websocket.query_params.get("session_database")
+    config_values = dict(websocket.query_params)
+    working_dir_param = config_values.get("working_dir")
+    session_database_param = config_values.get("session_database")
 
     await websocket.accept()
     # The client owns the session database path; reject connections that do not provide one.
@@ -42,14 +44,18 @@ async def agent_endpoint(websocket: WebSocket) -> None:
         await websocket.close(code=1008, reason="session_database query parameter is required")
         return
 
-    working_dir = Path(working_dir_param) if working_dir_param else _SERVER_DIR
-    session_database = Path(session_database_param)
+    if not working_dir_param:
+        config_values["working_dir"] = str(_SERVER_DIR)
+    try:
+        agent_config = AgentConfig.model_validate(config_values)
+    except ValidationError:
+        await websocket.close(code=1008, reason="invalid agent configuration")
+        return
 
     streaming_events: asyncio.Queue[StreamingEvent] = asyncio.Queue()
     agent_manager = AgentManager(
         streaming_events=streaming_events,
-        working_dir=working_dir,
-        session_database=session_database,
+        config=agent_config,
     )
     # Start the runner
     agent_manager_task = asyncio.create_task(agent_manager.start_manager())

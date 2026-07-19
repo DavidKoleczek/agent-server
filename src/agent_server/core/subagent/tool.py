@@ -1,7 +1,6 @@
 import asyncio
 from collections.abc import Iterable, Mapping
 from contextlib import suppress
-from pathlib import Path
 
 from liquid import render
 from openai.types.responses.function_tool_param import FunctionToolParam
@@ -15,6 +14,7 @@ from agent_server.schemas.activity import (
     StreamingEvent,
     UserMessageEvent,
 )
+from agent_server.schemas.agent_config import AgentConfig
 from agent_server.storage.session_store import SessionStore
 
 TOOL_NAME = "agent"
@@ -63,12 +63,14 @@ class AgentTool:
     def __init__(
         self,
         streaming_events: asyncio.Queue[StreamingEvent],
-        working_dir: Path,
-        session_database: Path,
+        config: AgentConfig,
     ) -> None:
+        if config.session_database is None:
+            raise ValueError("Sub-agent session database is required.")
+
         self.streaming_events = streaming_events
-        self.working_dir = working_dir
-        self.session_database = session_database
+        self.config = config
+        self._session_database = config.session_database
         self._agent_managers: dict[str, AgentManager] = {}
 
     def get_tool_defs(self) -> dict[str, FunctionToolParam]:
@@ -99,8 +101,7 @@ class AgentTool:
         sub_agent_events: asyncio.Queue[StreamingEvent] = asyncio.Queue()
         agent_manager = AgentManager(
             streaming_events=sub_agent_events,
-            working_dir=self.working_dir,
-            session_database=self.session_database,
+            config=self.config,
             agent_id=sub_agent_id,
             process_tree_root=False,
         )
@@ -173,7 +174,7 @@ class AgentTool:
     def _load_last_assistant_message(self, agent_id: str) -> str:
         """Loads the latest assistant text from a session database if it exists."""
 
-        with SessionStore(self.session_database) as session_store:
+        with SessionStore(self._session_database) as session_store:
             session_messages = session_store.load_session_chat_messages(agent_id=agent_id)
 
         for session_message in reversed(session_messages):

@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Any
 
 from interop_router.types import ChatMessage
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 from sqlalchemy import JSON, Column, Integer, MetaData, String, Table, UniqueConstraint, create_engine, select, update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.engine import Engine
@@ -253,6 +253,32 @@ class SessionStore:
 
         with self.engine.begin() as connection:
             connection.execute(statement)
+
+    def load_or_create_session_config(self, default_model: str | None) -> SessionConfig:
+        # Try validating if the default model is valid. If it is not, we will fall back to the default SessionConfig.
+        try:
+            initial_config = SessionConfig.model_validate({"model": default_model})
+        except ValidationError:
+            initial_config = SessionConfig()
+
+        # Attempt to create a session's config row if an existing row does not already exist.
+        insert_statement = (
+            insert(session_config)
+            .values(
+                id=SESSION_CONFIG_ID,
+                tool_preset=initial_config.tool_preset,
+                model=initial_config.model,
+            )
+            .on_conflict_do_nothing(index_elements=[session_config.c.id])
+        )
+        # This gets the current row.
+        select_statement = select(session_config).where(session_config.c.id == SESSION_CONFIG_ID)
+
+        with self.engine.begin() as connection:
+            connection.execute(insert_statement)
+            row = connection.execute(select_statement).mappings().one()
+
+        return SessionConfig(tool_preset=row["tool_preset"], model=row["model"])
 
     def load_session_config(self) -> SessionConfig:
         statement = select(session_config).where(session_config.c.id == SESSION_CONFIG_ID)

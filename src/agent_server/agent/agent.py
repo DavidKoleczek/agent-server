@@ -21,7 +21,7 @@ from openai.types.responses.response_function_tool_call_param import ResponseFun
 from openai.types.responses.response_input_item_param import FunctionCallOutput
 from openai.types.responses.tool_param import ToolParam
 from openai.types.shared_params import Reasoning
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import ValidationError
 
 from agent_server.agent.activity_converter import function_call_item_to_activity, response_to_activities
 from agent_server.agent.activity_stream_converter import ActivityStreamConverter, error_event, is_terminal_error
@@ -48,16 +48,9 @@ from agent_server.schemas.activity import (
     UserActivity,
     UserMessageEvent,
 )
+from agent_server.schemas.agent_config import AgentConfig
 from agent_server.schemas.session import SessionChatMessage, SessionConfig
 from agent_server.storage.session_store import SessionStore
-
-
-class AgentConfig(BaseModel):
-    working_dir: Path = Field(description="Directory the agent is working in.")
-    session_database: Path | None = Field(
-        default=None,
-        description="Path to the SQLite session database. If None, a new database is created in .agents/sessions.",
-    )
 
 
 class Agent:
@@ -77,7 +70,7 @@ class Agent:
         self._session_store = SessionStore(self._session_database)
         self.history: list[SessionChatMessage] = self._session_store.load_session_chat_messages(agent_id=self.agent_id)
         self.activities: list[SessionActivity] = self._session_store.load_activities(agent_id=self.agent_id)
-        self.session_config: SessionConfig = self._session_store.load_session_config()
+        self.session_config = self._session_store.load_or_create_session_config(self.config.default_model)
 
         self.router = Router()
         self.router.register("openai", AsyncOpenAI())
@@ -89,8 +82,7 @@ class Agent:
         self._agent_tool = (
             AgentTool(
                 streaming_events=self.streaming_events,
-                working_dir=self.config.working_dir,
-                session_database=self._session_database,
+                config=self.config.model_copy(update={"session_database": self._session_database}),
             )
             if self.agent_id == "main"
             else None
