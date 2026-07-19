@@ -149,7 +149,12 @@ class Agent:
                             self._append_chat_message(
                                 ChatMessage(message=EasyInputMessageParam(role="user", content=content))
                             )
-                            self._append_activity(UserActivity(id=str(uuid.uuid4()), state="complete", content=content))
+                            user_activity = self._append_activity(
+                                UserActivity(id=str(uuid.uuid4()), state="complete", content=content)
+                            )
+                            self.streaming_events.put_nowait(
+                                ActivityCreatedEvent(agent_id=self.agent_id, activity=user_activity)
+                            )
                     case PermissionChangeEvent():
                         if event.agent_id == self.agent_id:
                             self._handle_permission_change(event)

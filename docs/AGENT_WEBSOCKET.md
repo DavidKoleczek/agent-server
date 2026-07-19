@@ -50,6 +50,9 @@ Send a message to the agent.
 }
 ```
 
+The agent persists the message as a complete `user` activity and emits it in an `activity_created` event before streaming output for the turn. 
+Sub-agent prompts are emitted the same way with the sub-agent's `agent_id`.
+
 ### `permission_change`
 
 Update a tool call's permission state. The server routes the event to `agent_id`, applies the state to the call identified by `id`, and resumes that agent.
