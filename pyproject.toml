@@ -9,13 +9,11 @@ authors = [
 requires-python = ">=3.13"
 dependencies = [
     "SQLAlchemy>=2.0,<2.1",
-    "anthropic>=0.115,<1.0",
     "crawl4ai[pdf]>=0.9,<1.0",
     "fastapi[standard]>=0.139,<1.0",
     "feedparser>=6.0,<7.0",
-    "google-genai>=2.10,<3.0",
     "httpx>=0.28,<1.0",
-    "interop-router==0.2.0",
+    "interop-router==0.3.0",
     "jiter>=0.16,<1.0",
     "loguru>=0.7,<1.0",
     "markitdown==0.1.6",
