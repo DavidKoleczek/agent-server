@@ -1,6 +1,7 @@
 from openai.types.responses import ResponseFunctionCallOutputItemListParam
 from openai.types.responses.function_tool_param import FunctionToolParam
 
+from agent_server.core.tools._protocol import FunctionTool
 from agent_server.core.tools._utils import ConstraintPolicy
 from agent_server.core.web.process_url import process_url
 
@@ -34,7 +35,7 @@ WEB_FETCH_DEFINITION: FunctionToolParam = {
 }
 
 
-class WebFetchTool:
+class WebFetchTool(FunctionTool):
     def __init__(self) -> None:
         pass
 

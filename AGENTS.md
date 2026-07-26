@@ -42,6 +42,7 @@ print(render("Hello, {{ you }}!", you="World"))
 # Hello, World!
 ```
 - To learn about how packages work, you should read from the relevant source code. This is especially important when determining which types to use.
+- Do not add the keyword-only argument marker, `*`, in function definitions unless necessary.
 - Do not manually run checks like `uv run ruff format` or `uv run pytest`. They will either be run automatically after code changes or user triggered.
 
 

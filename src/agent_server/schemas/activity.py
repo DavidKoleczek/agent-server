@@ -38,7 +38,32 @@ class SessionConfigChangeEvent(BaseModel):
     new_value: str
 
 
-ClientEvent = UserMessageEvent | PermissionChangeEvent | CancelEvent | QuitEvent | SessionConfigChangeEvent
+class ModeChangeEvent(BaseModel):
+    type: Literal["mode_change"] = "mode_change"
+    new_mode: Literal["default", "plan"]
+
+
+class InputRequestResponseItem(BaseModel):
+    id: str
+    selections: list[str]  # This is a list in the case allow_multiple is True
+
+
+class InputRequestResponseEvent(BaseModel):
+    type: Literal["input_request_response"] = "input_request_response"
+    agent_id: str = "main"
+    id: str
+    items: list[InputRequestResponseItem]
+
+
+ClientEvent = (
+    UserMessageEvent
+    | PermissionChangeEvent
+    | CancelEvent
+    | QuitEvent
+    | SessionConfigChangeEvent
+    | ModeChangeEvent
+    | InputRequestResponseEvent
+)
 
 # endregion
 
@@ -77,13 +102,44 @@ class TaskActivity(ActivityBase):
     sub_agent_id: str | None = None  # If this Task is a sub-agent, then this will be the ID of the sub-agent
 
 
+class InputRequestItem(BaseModel):
+    id: str
+    header: str
+    content: str  # This can be the question
+    allow_multiple: bool  # If True, indicate that selecting mulitple options is allowed.
+    options: dict[str, str]  # keys are ids and values are the text to display
+    selections: list[str] | None = None  # The ids of the selected options.
+
+
+class InputRequestActivity(ActivityBase):
+    # Used for things like presenting plans and asking questions
+    type: Literal["input_request"] = "input_request"
+    title: str
+    items: list[InputRequestItem]
+
+
+class InfoActivity(ActivityBase):
+    # Used for things like indicating a mode, permission, change, etc. took effect
+    type: Literal["info"] = "info"
+    title: str
+    content: str
+
+
 class ErrorActivity(ActivityBase):
     type: Literal["error"] = "error"
     error_type: str
     detail: str
 
 
-SessionActivity = UserActivity | AssistantActivity | ReasoningActivity | TaskActivity | ErrorActivity
+SessionActivity = (
+    UserActivity
+    | AssistantActivity
+    | ReasoningActivity
+    | TaskActivity
+    | InputRequestActivity
+    | InfoActivity
+    | ErrorActivity
+)
 
 # endregion
 
@@ -153,8 +209,19 @@ class SessionConfigChangedEvent(StreamingEventBase):
     new_value: str
 
 
+class InfoEvent(StreamingEventBase):
+    type: Literal["info"] = "info"
+    title: str
+    content: str
+
+
 StreamingEvent = (
-    ActivityCreatedEvent | ActivityDeltaEvent | ActivityUpdatedEvent | StatusEvent | SessionConfigChangedEvent
+    ActivityCreatedEvent
+    | ActivityDeltaEvent
+    | ActivityUpdatedEvent
+    | StatusEvent
+    | SessionConfigChangedEvent
+    | InfoEvent
 )
 
 # endregion

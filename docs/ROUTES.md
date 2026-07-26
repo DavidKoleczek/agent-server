@@ -81,8 +81,8 @@ route is static and takes no parameters.
     {
       "key": "model",
       "label": "Model",
-      "values": ["gpt-5.5", "claude-opus-4-7", "gemini-3.5-flash"],
-      "default": "gpt-5.5"
+      "values": ["gpt-5.6-sol", "claude-opus-4-7", "gemini-3.5-flash"],
+      "default": "gpt-5.6-sol"
     }
   ]
 }
@@ -117,6 +117,7 @@ the same `session_database` used to open the `/agent` WebSocket.
 ```json
 {
   "tool_preset": "permissive",
-  "model": "gpt-5.5"
+  "mode": "default",
+  "model": "gpt-5.6-sol"
 }
 ```

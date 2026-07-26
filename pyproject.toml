@@ -13,7 +13,7 @@ dependencies = [
     "fastapi[standard]>=0.139,<1.0",
     "feedparser>=6.0,<7.0",
     "httpx>=0.28,<1.0",
-    "interop-router==0.3.0",
+    "interop-router==0.3.1",
     "jiter>=0.16,<1.0",
     "loguru>=0.7,<1.0",
     "markitdown==0.1.6",
@@ -36,7 +36,7 @@ dev = [
     "pytest-asyncio>=1.4",
     "pytest>=9.1",
     "ruff>=0.15",
-    "ty>=0.0.35",
+    "ty>=0.0.63",
 ]
 
 [build-system]
@@ -55,7 +55,8 @@ data = [
 
 [tool.uv]
 exclude-newer = "3 days"
-exclude-newer-package = { interop-router = "2099-01-01" }
+exclude-newer-package = { interop-router = "2099-01-01", anthropic = false }
+
 
 [tool.ruff]
 line-length = 120

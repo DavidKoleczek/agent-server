@@ -63,10 +63,15 @@ class ActivityStreamConverter:
 
     Stateful: a single instance must be used for exactly one response stream, since it tracks the
     in-progress activity for each output index across delta events.
+
+    `_input_request_tool_names` identifies tools whose function calls should *later*
+    become `InputRequestActivity` instances and we skip creating an Activity for them here.
+
     """
 
-    def __init__(self) -> None:
+    def __init__(self, input_request_tool_names: set[str] | None = None) -> None:
         self._items: dict[int, _StreamItem] = {}
+        self._input_request_tool_names = input_request_tool_names or set()
 
     def handle(self, event: ResponseStreamEvent) -> list[StreamingEvent]:
         if isinstance(event, ResponseOutputItemAddedEvent):
@@ -111,6 +116,9 @@ class ActivityStreamConverter:
             activity_id = item.call_id
             if not activity_id:
                 raise ValueError("Function call stream item must include call_id.")
+            if item.name in self._input_request_tool_names:
+                self._items[event.output_index] = _StreamItem(activity_id=activity_id)
+                return []
             self._items[event.output_index] = _StreamItem(activity_id=activity_id, created=True)
             return [
                 ActivityCreatedEvent(
@@ -141,6 +149,9 @@ class ActivityStreamConverter:
     ) -> list[StreamingEvent]:
         record.raw_arguments += event.delta
         parsed = _parse_partial_arguments(record.raw_arguments)
+        if not record.created:
+            record.emitted_arguments = parsed
+            return []
 
         events: list[StreamingEvent] = []
         for key, value in parsed.items():
@@ -162,6 +173,8 @@ class ActivityStreamConverter:
         if isinstance(item, ResponseOutputMessage):
             return [ActivityUpdatedEvent(activity=self._finalize_message(record, item))]
         if isinstance(item, ResponseFunctionToolCall):
+            if not record.created:
+                return []
             return [ActivityUpdatedEvent(activity=self._finalize_function_call(record, item))]
         if isinstance(item, ResponseReasoningItem):
             return self._finalize_reasoning(record, item)

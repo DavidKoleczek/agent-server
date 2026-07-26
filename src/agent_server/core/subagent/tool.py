@@ -6,6 +6,7 @@ from liquid import render
 from openai.types.responses.function_tool_param import FunctionToolParam
 
 from agent_server.agent.agent_manager import AgentManager
+from agent_server.core.tools._protocol import FunctionTool
 from agent_server.core.tools._utils import ConstraintPolicy
 from agent_server.schemas.activity import (
     ClientEvent,
@@ -59,7 +60,7 @@ TIMED_OUT_MESSAGE = "The agent has timed out after {{minutes}} of inactivity. Pl
 ERROR_MESSAGE = "The agent has unknown error. Please continue without a sub-agent."
 
 
-class AgentTool:
+class AgentTool(FunctionTool):
     def __init__(
         self,
         streaming_events: asyncio.Queue[StreamingEvent],

@@ -2,6 +2,15 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "Python: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "cwd": "${fileDirname}",
+            "console": "integratedTerminal",
+            "justMyCode": false
+        },
+        {
             "name": "agent-server",
             "type": "debugpy",
             "request": "launch",
@@ -18,13 +27,27 @@
             "justMyCode": false
         },
         {
-            "name": "Python: Current File",
+            "name": "Basic Client",
             "type": "debugpy",
             "request": "launch",
-            "program": "${file}",
-            "cwd": "${fileDirname}",
+            "program": "${workspaceFolder}\\scripts\\ws_client.py",
+            "args": [
+                "--working-dir",
+                "${workspaceFolder}\\test"
+            ],
+            "cwd": "${workspaceFolder}",
             "console": "integratedTerminal",
             "justMyCode": false
+        }
+    ],
+    "compounds": [
+        {
+            "name": "Launch basic client and agent-server",
+            "configurations": [
+                "agent-server",
+                "Basic Client"
+            ],
+            "stopAll": true
         }
     ]
 }

@@ -3,6 +3,7 @@ from typing import Literal
 from openai.types.responses.function_tool_param import FunctionToolParam
 from pydantic import BaseModel, ValidationError
 
+from agent_server.core.tools._protocol import FunctionTool
 from agent_server.core.tools._utils import ConstraintPolicy
 
 TodoStatus = Literal["pending", "in_progress", "completed"]
@@ -228,7 +229,7 @@ TODO_WRITE_TOOL_DEFINITION: FunctionToolParam = {
 }
 
 
-class TodoTool:
+class TodoTool(FunctionTool):
     def __init__(self) -> None:
         self._todos: list[TodoItem] = []
 

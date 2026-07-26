@@ -18,6 +18,7 @@ from liquid import render
 from openai.types.responses.function_tool_param import FunctionToolParam
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from agent_server.core.tools._protocol import FunctionTool
 from agent_server.core.tools._utils import ConstraintPolicy, ConstraintRule
 
 if TYPE_CHECKING or sys.platform == "win32":
@@ -236,7 +237,7 @@ class _BackgroundTask(BaseModel):
     completion: asyncio.Task[int]
 
 
-class PowershellTool:
+class PowershellTool(FunctionTool):
     def __init__(self, config: PowershellToolConfig) -> None:
         self.config = config
 

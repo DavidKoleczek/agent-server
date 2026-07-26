@@ -18,5 +18,5 @@ The key components, in order of the request path:
 1. [AgentManager](../src/agent_server/agent/agent_manager.py): Manages worker readiness, event forwarding, lifecycle statuses, restart backoff, cancellation, and shutdown.
 1. [Managed worker process](../src/agent_server/agent/processes/managed_worker_process.py): Starts a worker only after process-tree containment is established.
 1. [Agent worker](../src/agent_server/agent/agent_worker.py): Adapts stdin/stdout pipes to in-process queues, calls `Agent.start()`, and exits if the agent returns unexpectedly.
-1. [Agent](../src/agent_server/agent/agent.py): The core AI loop. Calls the model, streams responses, executes tools, and manages conversation history.
+1. [Agent](../src/agent_server/agent/agent.py): The core AI loop. Calls the model, streams responses, executes tools, manages conversation history, and coordinates mode changes and structured input requests.
 1. [Agent tool](../src/agent_server/core/subagent/tool.py): Lets the main agent launch a sub-agent through another `AgentManager`. Sub-agent activity is persisted in the same session database with a distinct `agent_id` and streamed back to the client.

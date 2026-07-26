@@ -12,6 +12,7 @@ from loguru import logger
 from openai.types.responses.function_tool_param import FunctionToolParam
 from pydantic import BaseModel, Field
 
+from agent_server.core.tools._protocol import FunctionTool
 from agent_server.core.tools._utils import ConstraintPolicy, ConstraintRule, check_path_constraint
 
 type Replacer = Generator[str]
@@ -94,7 +95,7 @@ class EditToolConfig(BaseModel):
     )
 
 
-class EditTool:
+class EditTool(FunctionTool):
     def __init__(self, config: EditToolConfig) -> None:
         self.config = config
 

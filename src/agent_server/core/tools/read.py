@@ -11,6 +11,7 @@ from openai.types.responses.response_input_image_content_param import ResponseIn
 from pydantic import BaseModel
 import pymupdf4llm
 
+from agent_server.core.tools._protocol import FunctionTool
 from agent_server.core.tools._utils import ConstraintPolicy, ConstraintRule, check_path_constraint
 
 TOOL_NAME = "read"
@@ -76,7 +77,7 @@ IMAGE_MIME_TYPES = {
 }
 
 
-class ReadTool:
+class ReadTool(FunctionTool):
     def __init__(self, config: ReadToolConfig) -> None:
         """Initialize the ReadTool with constraint configuration.
 

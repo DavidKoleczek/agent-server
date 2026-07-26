@@ -6,6 +6,8 @@ from pydantic import BaseModel, Field
 
 from agent_server.schemas.activity import ActivityState, SessionActivity, TaskPermission
 
+MessageOrigin = Literal["user", "model_output", "tool_output", "system_reminder"]
+
 
 class SessionChatMessage(BaseModel):
     """
@@ -14,9 +16,12 @@ class SessionChatMessage(BaseModel):
     """
 
     position: int
-    # Currently this is only set on FunctionCallOutput messages and not depended on (instead we use TaskActivity as the source of truth)
+    message_origin: MessageOrigin
     permission: TaskPermission | None = Field(
         default=None, description="The permission associated with this message, if any."
+    )
+    state: ActivityState | None = Field(
+        default=None, description="The state of the activity associated with this message, if any."
     )
     agent_id: str = Field(default="main")
     chat_message: ChatMessage
@@ -42,4 +47,5 @@ class SessionConfig(BaseModel):
     """
 
     tool_preset: Literal["permissive", "standard"] = Field(default="permissive", title="Tool Preset")
-    model: SupportedModel = Field(default="gpt-5.5", title="Model")
+    mode: Literal["default", "plan"] = Field(default="default", title="Mode")
+    model: SupportedModel = Field(default="gpt-5.6-sol", title="Model")

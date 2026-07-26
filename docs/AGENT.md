@@ -14,7 +14,7 @@ from agent_server.agent.agent import AgentConfig
 config = AgentConfig(
     working_dir=Path("/path/to/project"),
     session_database=Path("conversation.sqlite"),
-    default_model="gpt-5.5",
+    default_model="gpt-5.6-sol",
 )
 ```
 
@@ -71,10 +71,27 @@ if __name__ == "__main__":
 See [scripts/run_agent.py](../scripts/run_agent.py) for a complete working example that feeds timed activities and logs all events to a file.
 
 
+## Modes and Input Requests
+
+The main agent supports `default` and `plan` modes. Send a `ModeChangeEvent` through the client event queue to change modes. 
+The selected mode is persisted in the session database. 
+Changing modes updates the available tools and stores a passive system reminder for the next model request without starting one.
+Requesting the active mode is a no-op.
+Plan mode instructs the agent to create a plan under `<working_dir>/.agents/plans/` and submit it for approval before implementation.
+
+The main agent can emit an `InputRequestActivity` when it needs answers or plan approval. 
+The host must present every item and return an `InputRequestResponseEvent` with the activity ID, item IDs, and selected option IDs or free-form responses. 
+The completed activity persists the selections and the agent resumes processing. 
+See [Agent WebSocket](AGENT_WEBSOCKET.md) for the event and activity schemas.
+
+
 ## Sub-agents
 
-Agents constructed with `agent_id="main"` include the `agent` tool. That tool starts a sub-agent in the same working directory and session database, gives it the requested prompt, forwards its streaming events to the caller, and returns the sub-agent's last assistant message as the tool result.
-
-Sub-agents use generated IDs like `sub-1234abcd`. Their persisted activities and chat messages use that ID, while the main agent keeps using `main`. Sub-agents do not receive the `agent` tool.
-
-Each sub-agent runs through its own `AgentManager`. When the agent is hosted by the server, sub-agent workers remain inside the main worker's managed process tree so cancellation and shutdown cannot orphan them.
+Agents constructed with `agent_id="main"` include the `agent` tool. 
+That tool starts a sub-agent in the same working directory and session database, gives it the requested prompt, 
+forwards its streaming events to the caller, and returns the sub-agent's last assistant message as the tool result.
+Sub-agents use generated IDs like `sub-1234abcd`. 
+Their persisted activities and chat messages use that ID, while the main agent keeps using `main`. 
+Sub-agents do not receive the `agent`, `ask_user`, or `propose_plan` tools.
+Each sub-agent runs through its own `AgentManager`. 
+When the agent is hosted by the server, sub-agent workers remain inside the main worker's managed process tree so cancellation and shutdown cannot orphan them.

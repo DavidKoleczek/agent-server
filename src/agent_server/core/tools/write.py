@@ -3,6 +3,7 @@ from pathlib import Path
 from openai.types.responses.function_tool_param import FunctionToolParam
 from pydantic import BaseModel
 
+from agent_server.core.tools._protocol import FunctionTool
 from agent_server.core.tools._utils import ConstraintPolicy, ConstraintRule, check_path_constraint
 
 TOOL_NAME = "write"
@@ -46,7 +47,7 @@ class WriteToolConfig(BaseModel):
     default_policy: ConstraintPolicy = ConstraintPolicy.ASK
 
 
-class WriteTool:
+class WriteTool(FunctionTool):
     def __init__(self, config: WriteToolConfig) -> None:
         self.config = config
 

@@ -5,6 +5,7 @@ from liquid import render
 from openai.types.responses.function_tool_param import FunctionToolParam
 from pydantic import BaseModel
 
+from agent_server.core.tools._protocol import FunctionTool
 from agent_server.core.tools._ripgrep import RipgrepOutputDecodeError, find_ripgrep, run_ripgrep
 from agent_server.core.tools._utils import ConstraintPolicy, ConstraintRule, check_path_constraint
 
@@ -112,7 +113,7 @@ class GrepToolConfig(BaseModel):
     default_policy: ConstraintPolicy = ConstraintPolicy.ASK
 
 
-class GrepTool:
+class GrepTool(FunctionTool):
     def __init__(self, config: GrepToolConfig) -> None:
         self.config = config
 

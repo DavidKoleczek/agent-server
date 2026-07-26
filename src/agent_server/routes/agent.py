@@ -11,6 +11,8 @@ from agent_server.schemas.activity import (
     CancelEvent,
     ClientEvent,
     ErrorActivity,
+    InputRequestResponseEvent,
+    ModeChangeEvent,
     PermissionChangeEvent,
     QuitEvent,
     SessionConfigChangeEvent,
@@ -79,7 +81,13 @@ async def agent_endpoint(websocket: WebSocket) -> None:
                 continue
 
             match client_event:
-                case UserMessageEvent() | PermissionChangeEvent() | SessionConfigChangeEvent():
+                case (
+                    UserMessageEvent()
+                    | PermissionChangeEvent()
+                    | SessionConfigChangeEvent()
+                    | InputRequestResponseEvent()
+                    | ModeChangeEvent()
+                ):
                     await streaming_events.put(StatusEvent(status_id="processing_message"))
                     await agent_manager.submit_event(client_event)
                 case CancelEvent():

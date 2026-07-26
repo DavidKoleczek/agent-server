@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from tree_sitter import Language, Node, Parser
 import tree_sitter_bash as tsbash
 
+from agent_server.core.tools._protocol import FunctionTool
 from agent_server.core.tools._utils import ConstraintPolicy, ConstraintRule
 
 BASH_LANGUAGE = Language(tsbash.language())
@@ -235,7 +236,7 @@ class BackgroundTask:
     output_file: Path
 
 
-class BashTool:
+class BashTool(FunctionTool):
     def __init__(self, config: BashToolConfig) -> None:
         self.config = config
         self.current_working_dir = config.working_dir

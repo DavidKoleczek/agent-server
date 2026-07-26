@@ -9,7 +9,7 @@ from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.engine import Engine
 
 from agent_server.schemas.activity import SessionActivity, TaskPermission
-from agent_server.schemas.session import SessionActivityRecord, SessionChatMessage, SessionConfig
+from agent_server.schemas.session import MessageOrigin, SessionActivityRecord, SessionChatMessage, SessionConfig
 
 metadata = MetaData()
 session_activity_adapter: TypeAdapter[SessionActivity] = TypeAdapter(SessionActivity)
@@ -21,6 +21,7 @@ chat_messages = Table(
     Column("position", Integer, nullable=False),
     Column("timestamp", String, nullable=False),
     Column("created_by", String, nullable=False),
+    Column("message_origin", String, nullable=False),
     Column("permission", String, nullable=True),
     Column("agent_id", String, nullable=False),
     Column("chat_message", JSON, nullable=False),
@@ -48,6 +49,7 @@ session_config = Table(
     metadata,
     Column("id", Integer, primary_key=True),
     Column("tool_preset", String, nullable=False),
+    Column("mode", String, nullable=False),
     Column("model", String, nullable=False),
 )
 
@@ -73,6 +75,7 @@ class SessionStore:
         self,
         position: int,
         message: ChatMessage,
+        message_origin: MessageOrigin,
         permission: TaskPermission | None = None,
         agent_id: str = "main",
     ) -> None:
@@ -87,6 +90,7 @@ class SessionStore:
                     position=position,
                     timestamp=message.timestamp.isoformat(),
                     created_by=message.created_by,
+                    message_origin=message_origin,
                     permission=permission,
                     agent_id=agent_id,
                     chat_message=chat_message,
@@ -175,6 +179,14 @@ class SessionStore:
             if not isinstance(chat_message, dict):
                 raise TypeError("chat_message must be a JSON object.")
 
+            origin_value = row["message_origin"]
+            message_origin: MessageOrigin
+            match origin_value:
+                case "user" | "model_output" | "tool_output" | "system_reminder":
+                    message_origin = origin_value
+                case _:
+                    raise ValueError(f"Unknown chat message origin: {origin_value}")
+
             permission_value = row["permission"]
             permission: TaskPermission | None
             match permission_value:
@@ -188,6 +200,7 @@ class SessionStore:
             session_chat_messages.append(
                 SessionChatMessage(
                     position=int(row["position"]),
+                    message_origin=message_origin,
                     permission=permission,
                     agent_id=str(row["agent_id"]),
                     chat_message=ChatMessage.from_json(json.dumps(chat_message)),
@@ -239,6 +252,7 @@ class SessionStore:
         values: dict[str, Any] = {
             "id": SESSION_CONFIG_ID,
             "tool_preset": config.tool_preset,
+            "mode": config.mode,
             "model": config.model,
         }
         update_values = {key: value for key, value in values.items() if key != "id"}
@@ -267,6 +281,7 @@ class SessionStore:
             .values(
                 id=SESSION_CONFIG_ID,
                 tool_preset=initial_config.tool_preset,
+                mode=initial_config.mode,
                 model=initial_config.model,
             )
             .on_conflict_do_nothing(index_elements=[session_config.c.id])
@@ -278,7 +293,7 @@ class SessionStore:
             connection.execute(insert_statement)
             row = connection.execute(select_statement).mappings().one()
 
-        return SessionConfig(tool_preset=row["tool_preset"], model=row["model"])
+        return SessionConfig(tool_preset=row["tool_preset"], mode=row["mode"], model=row["model"])
 
     def load_session_config(self) -> SessionConfig:
         statement = select(session_config).where(session_config.c.id == SESSION_CONFIG_ID)
@@ -289,4 +304,4 @@ class SessionStore:
         if row is None:
             return SessionConfig()
 
-        return SessionConfig(tool_preset=row["tool_preset"], model=row["model"])
+        return SessionConfig(tool_preset=row["tool_preset"], mode=row["mode"], model=row["model"])

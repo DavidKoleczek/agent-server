@@ -26,9 +26,10 @@ ws://host:port/agent
 1. During a turn, the agent streams `activity_created`, `activity_delta`, and `activity_updated` events that build up and finalize the session activities, interleaved with `status` events.
 1. A new tool call starts with `permission` set to `not_determined` while the server evaluates its permission policy. 
 If approval is required, the server changes `permission` to `pending` and pauses the turn until the client accepts or denies the call.
+1. When the agent needs answers or plan approval, it creates an `input_request` activity and pauses the turn until the client sends an `input_request_response`.
 1. When the main agent runs the `agent` tool, it starts a sub-agent. The sub-agent's streaming events are forwarded over the same WebSocket, and its session activities carry the sub-agent's `agent_id`.
-1. Sending `session_config_change` updates a session setting; the server persists it, applies it to the main agent
-   and active sub-agents, and replies with a `session_config_changed` event.
+1. Sending `session_config_change` updates a session setting; the server persists it, applies it to the main agent and active sub-agents, and replies with a `session_config_changed` event.
+1. Sending `mode_change` switches the main agent between `default` and `plan` modes, persists the mode, stores a passive system reminder, and emits an `info` event. Plan mode adds plan approval through an `input_request`.
 1. Sending `cancel` terminates the main worker and all descendants, emits cancellation status events, and starts a fresh worker.
 1. Sending `quit` terminates the complete worker process tree and manager, then closes the WebSocket connection from the server side.
 1. If the main worker exits unexpectedly, the server terminates its remaining descendants, emits an error activity, and starts a fresh worker after bounded exponential backoff.
@@ -105,6 +106,53 @@ Change a session config value. The server validates the value, persists it, appl
 - `config_key`: The config key to change. One of `tool_preset`, `model`.
 - `new_value`: The new value for the key.
 
+### `mode_change`
+
+Change the main agent's operating mode. The server persists the mode and emits an `info` event after applying the change.
+
+```json
+{
+  "type": "mode_change",
+  "new_mode": "plan"
+}
+```
+
+- `new_mode`: The mode to activate. One of `default`, `plan`.
+
+Changing modes updates the available tools immediately and stores a passive system reminder in model history.
+The reminder is included in the next independently authorized model request but does not start one.
+If no other work is active, the server emits `agent_turn_ended` and waits for another client event.
+Requesting the active mode is a no-op and does not emit an `info` event.
+
+In plan mode, the agent creates plans under `<working_dir>/.agents/plans/` and uses an `input_request` activity to request approval. 
+Approving or denying a proposed plan returns the agent to `default` mode. A free-form response requests plan changes and leaves plan mode active.
+
+### `input_request_response`
+
+Respond to a pending `input_request` activity. The response must identify the agent and request and
+must contain one response for every item in the request. Every item requires at least one selection.
+
+```json
+{
+  "type": "input_request_response",
+  "agent_id": "main",
+  "id": "fc_123",
+  "items": [
+    {
+      "id": "question_1",
+      "selections": ["option_1"]
+    }
+  ]
+}
+```
+
+- `agent_id`: The agent that owns the input request. Defaults to `main`.
+- `id`: The `id` of the pending `input_request` activity.
+- `items`: Responses keyed by input-request item ID.
+- `selections`: Selected option IDs or free-form responses. Multiple values are allowed only when the corresponding request item sets `allow_multiple` to `true`.
+
+An invalid or stale response produces an `error` activity and leaves the input request pending.
+
 
 ## Server Activities
 
@@ -136,8 +184,8 @@ Reports the agent's current lifecycle phase. The `status_id` field identifies th
 - `agent_stopping`: The server is terminating the worker process tree for connection shutdown.
 - `agent_stopped`: The worker process tree exited due to connection shutdown.
 - `agent_running`: The agent reconciliation loop is processing available work.
-- `agent_turn_ended`: The current agent turn has ended.
-- `processing_message`: The server received a `user_message`, `permission_change`, or `session_config_change` event and is submitting it for processing.
+- `agent_turn_ended`: The current turn or non-generating event has finished and the agent is waiting.
+- `processing_message`: The server received an event that must be submitted to the agent worker.
 - `waiting_for_llm_response`: The agent has sent a request and is waiting for the model to respond.
 - `processing_llm_response`: The agent is processing the model's response.
 - `executing_tool`: The agent is executing a tool call.
@@ -208,10 +256,28 @@ Confirms that a session config value changed, in response to a `session_config_c
 - `config_key`: The config key that changed.
 - `new_value`: The value now in effect.
 
+### `info`
+
+Reports a transient informational change, such as a mode transition.
+
+```json
+{
+  "type": "info",
+  "agent_id": "main",
+  "title": "Mode Changed",
+  "content": "Mode changed to plan"
+}
+```
+
+- `title`: A short description of the event.
+- `content`: The event details.
+
 
 ## Session Activities
 
-Session activities are the persisted records of a conversation. They are delivered inside `activity_created` and `activity_updated` events and can also be loaded later from the session database.
+Session activities are the persisted records of a conversation. 
+Most are delivered inside `activity_created` and `activity_updated` events as they are produced, 
+and all can be loaded later from the session database.
 
 Every activity shares a common base:
 
@@ -293,6 +359,70 @@ A tool call made by the agent.
 - `sub_agent_id`: The generated agent ID when the task launches a sub-agent, otherwise `null`.
 
 For sub-agent calls, `name` is `agent`; `arguments` contains `description`, `prompt`, `subagent_type`, and the injected `sub_agent_id`; and `result` is the sub-agent's final assistant message.
+
+The `ask_user` and `propose_plan` tools are represented as `input_request` activities instead of `task` activities.
+
+### `input_request`
+
+A structured request for user input. The activity remains `in_progress` until the client sends a
+complete `input_request_response`.
+
+```json
+{
+  "id": "fc_123",
+  "agent_id": "main",
+  "type": "input_request",
+  "state": "in_progress",
+  "timestamp": "2026-06-05T12:00:00Z",
+  "title": "Questions",
+  "items": [
+    {
+      "id": "question_1",
+      "header": "Database",
+      "content": "Which database should the application use?",
+      "allow_multiple": false,
+      "options": {
+        "option_1": "PostgreSQL",
+        "option_2": "SQLite"
+      },
+      "selections": null
+    }
+  ]
+}
+```
+
+- `title`: A short description of the request.
+- `items`: One or more questions or approval items.
+- `items[].id`: The item ID to return in `input_request_response`.
+- `items[].header`: A short display label.
+- `items[].content`: The question, plan summary, or other request details.
+- `items[].allow_multiple`: Whether the response may contain more than one selection.
+- `items[].options`: Option IDs mapped to display labels. Clients may also allow a free-form
+  response.
+- `items[].selections`: The submitted option IDs or free-form responses. This is `null` while the
+  request is pending.
+
+After a valid response, the server changes `state` to `complete`, records the selections, and emits
+an `activity_updated` event.
+
+### `info`
+
+A persisted informational record, such as a mode change.
+
+```json
+{
+  "id": "info_123",
+  "agent_id": "main",
+  "type": "info",
+  "state": "complete",
+  "timestamp": "2026-06-05T12:00:00Z",
+  "title": "Mode Changed",
+  "content": "Mode changed to plan"
+}
+```
+
+- `title`: A short description of the event.
+- `content`: The event details.
 
 ### `error`
 
